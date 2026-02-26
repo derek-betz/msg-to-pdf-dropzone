@@ -186,37 +186,83 @@ def build_email_html_document(record: EmailRecord) -> str:
 """
 
 
-def _try_write_pdf_via_word(html_document: str, output_path: Path) -> bool:
+def _find_edge_executable() -> Path | None:
+    candidates = [
+        Path("C:/Program Files/Microsoft/Edge/Application/msedge.exe"),
+        Path("C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"),
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _print_web_document_via_edge(input_path: Path, output_path: Path) -> bool:
     if os.name != "nt":
         return False
 
-    if os.environ.get("MSG_TO_PDF_DISABLE_WORD", "").strip() == "1":
+    edge_path = _find_edge_executable()
+    if edge_path is None:
         return False
 
-    temp_dir = Path(tempfile.mkdtemp(prefix="msg-to-pdf-html-"))
-    html_path = temp_dir / "email.html"
-    html_path.write_text(html_document, encoding="utf-8")
-
+    uri = "file:///" + str(input_path.resolve()).replace("\\", "/")
+    command = [
+        str(edge_path),
+        "--headless",
+        "--disable-gpu",
+        "--run-all-compositor-stages-before-draw",
+        "--virtual-time-budget=10000",
+        f"--print-to-pdf={output_path}",
+        uri,
+    ]
     try:
-        command = [
-            sys.executable,
-            "-m",
-            "msg_to_pdf_dropzone.word_pdf_worker",
-            str(html_path),
-            str(output_path),
-        ]
-        result = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=120,
-            check=False,
-        )
+        result = subprocess.run(command, capture_output=True, text=True, timeout=120, check=False)
         if result.returncode != 0:
             return False
         return output_path.exists() and output_path.stat().st_size > 0
     except Exception:
         return False
+
+
+def _try_write_pdf_via_outlook_and_edge(msg_path: Path, output_path: Path) -> bool:
+    if os.name != "nt":
+        return False
+
+    if os.environ.get("MSG_TO_PDF_DISABLE_OUTLOOK_EDGE", "").strip() == "1":
+        return False
+
+    if not msg_path.exists():
+        return False
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="msg-to-pdf-mht-"))
+    mht_path = temp_dir / "email.mht"
+    try:
+        command = [
+            sys.executable,
+            "-m",
+            "msg_to_pdf_dropzone.outlook_mhtml_worker",
+            str(msg_path),
+            str(mht_path),
+        ]
+        result = subprocess.run(command, capture_output=True, text=True, timeout=120, check=False)
+        if result.returncode != 0:
+            return False
+        return _print_web_document_via_edge(mht_path, output_path)
+    except Exception:
+        return False
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def _try_write_pdf_via_edge_html(html_document: str, output_path: Path) -> bool:
+    if os.name != "nt":
+        return False
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="msg-to-pdf-html-"))
+    html_path = temp_dir / "email.html"
+    html_path.write_text(html_document, encoding="utf-8")
+    try:
+        return _print_web_document_via_edge(html_path, output_path)
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -275,8 +321,11 @@ def _write_pdf_via_reportlab(record: EmailRecord, output_path: Path) -> None:
 def write_email_pdf(record: EmailRecord, output_path: Path) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    if _try_write_pdf_via_outlook_and_edge(record.source_path, output_path):
+        return output_path
+
     html_document = build_email_html_document(record)
-    if _try_write_pdf_via_word(html_document, output_path):
+    if _try_write_pdf_via_edge_html(html_document, output_path):
         return output_path
 
     _write_pdf_via_reportlab(record, output_path)

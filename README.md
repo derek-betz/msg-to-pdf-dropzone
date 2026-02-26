@@ -17,7 +17,7 @@ Windows desktop tool to drag and drop up to 10 Outlook `.msg` files and convert 
 - Windows
 - Python 3.10+
 - Outlook `.msg` files
-- Microsoft Word installed is recommended for richer PDF rendering.
+- Microsoft Edge (installed by default on most Windows systems)
 
 ## Install
 
@@ -53,4 +53,4 @@ pytest
 - Filenames are sanitized for Windows.
 - If multiple outputs would have the same name, a numeric suffix is added.
 - Outlook drag handling uses COM to export selected items to temporary `.msg` files when direct file paths are not provided.
-- PDF generation first tries a high-fidelity HTML-to-PDF pass through Word automation, then falls back to the built-in renderer if Word conversion is unavailable.
+- PDF generation first tries a high-fidelity `.msg` render via Outlook MHTML export + Edge headless print, then an HTML-to-PDF Edge pass, then falls back to the built-in renderer.
