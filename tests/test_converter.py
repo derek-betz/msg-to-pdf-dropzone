@@ -62,4 +62,4 @@ def test_convert_msg_files_uses_latest_thread_date_for_filename(monkeypatch, tmp
     result = convert_msg_files([email_one, email_two], tmp_path)
 
     assert len(result.converted_files) == 2
-    assert all(path.name.startswith("2026-01-05 ") for path in result.converted_files)
+    assert all(path.name.startswith("2026-01-05_") for path in result.converted_files)

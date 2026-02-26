@@ -45,8 +45,12 @@ def test_get_latest_thread_dates_uses_latest_date_per_thread() -> None:
 
 def test_build_pdf_filename_prefixes_date_and_sanitizes_subject() -> None:
     file_name = build_pdf_filename("Q1: Planning / Kickoff?", datetime(2026, 2, 20).date())
-    assert file_name == "2026-02-20 Q1_ Planning _ Kickoff_.pdf"
+    assert file_name == "2026-02-20_Q1_ Planning _ Kickoff_.pdf"
 
 
 def test_sanitize_filename_part_defaults_when_empty() -> None:
     assert sanitize_filename_part("   ") == "No Subject"
+
+
+def test_sanitize_filename_part_preserves_internal_double_spaces() -> None:
+    assert sanitize_filename_part("DES  2101166  SR 127") == "DES  2101166  SR 127"

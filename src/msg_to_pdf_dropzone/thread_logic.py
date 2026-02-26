@@ -7,7 +7,6 @@ from pathlib import Path
 from .models import EmailRecord
 
 INVALID_FILENAME_CHARS = re.compile(r"[<>:\"/\\|?*\x00-\x1F]")
-WHITESPACE_PATTERN = re.compile(r"\s+")
 THREAD_PREFIX_PATTERN = re.compile(r"^\s*((re|fw|fwd)\s*:\s*)+", re.IGNORECASE)
 
 
@@ -29,8 +28,9 @@ def get_latest_thread_dates(records: list[EmailRecord]) -> dict[str, date]:
 
 def sanitize_filename_part(value: str, max_length: int = 120) -> str:
     candidate = (value or "").strip() or "No Subject"
+    candidate = candidate.replace("\r", " ").replace("\n", " ").replace("\t", " ")
     candidate = INVALID_FILENAME_CHARS.sub("_", candidate)
-    candidate = WHITESPACE_PATTERN.sub(" ", candidate).strip(" .")
+    candidate = candidate.strip(" .")
     if not candidate:
         candidate = "No Subject"
     return candidate[:max_length].rstrip(" .")
@@ -38,7 +38,7 @@ def sanitize_filename_part(value: str, max_length: int = 120) -> str:
 
 def build_pdf_filename(subject: str, thread_latest_date: date) -> str:
     safe_subject = sanitize_filename_part(subject)
-    return f"{thread_latest_date:%Y-%m-%d} {safe_subject}.pdf"
+    return f"{thread_latest_date:%Y-%m-%d}_{safe_subject}.pdf"
 
 
 def make_unique_path(path: Path) -> Path:

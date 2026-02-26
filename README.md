@@ -8,7 +8,7 @@ Windows desktop tool to drag and drop up to 10 Outlook `.msg` files and convert 
 - Supports dragging selected messages directly from Classic Outlook.
 - Converts each email to one PDF.
 - Names each PDF as:
-  - `YYYY-MM-DD <email subject>.pdf`
+  - `YYYY-MM-DD_<email subject>.pdf`
   - `YYYY-MM-DD` is the latest email date found among dropped emails in the same thread.
 - Prompts you to select the save folder before conversion.
 
