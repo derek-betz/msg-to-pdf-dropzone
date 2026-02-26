@@ -31,7 +31,7 @@ def _as_text(value: object) -> str:
 
 
 def parse_msg_file(msg_path: Path) -> EmailRecord:
-    if msg_path.suffix.lower() != ".msg":
+    if msg_path.suffix and msg_path.suffix.lower() != ".msg":
         raise ValueError(f"Unsupported file type: {msg_path}")
 
     message = extract_msg.Message(str(msg_path))

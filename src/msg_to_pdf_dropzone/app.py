@@ -4,19 +4,23 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from tkinterdnd2 import DND_FILES, TkinterDnD
+from tkinterdnd2 import COPY, DND_ALL, TkinterDnD
 
 from .converter import MAX_FILES_PER_BATCH, ConversionError, convert_msg_files
+from .drop_helpers import is_supported_msg_candidate, parse_drop_paths, wait_for_materialized_file
+from .outlook_selection import extract_selected_outlook_messages, is_likely_outlook_drop
 
 
 class MsgToPdfApp:
     def __init__(self, root: TkinterDnD.Tk) -> None:
         self.root = root
         self.selected_files: list[Path] = []
+        self.temp_outlook_files: set[Path] = set()
 
         self.root.title("MSG to PDF Dropzone")
         self.root.geometry("780x520")
         self.root.minsize(700, 440)
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self.status_var = tk.StringVar(value="Drop up to 10 .msg files.")
 
@@ -49,8 +53,12 @@ class MsgToPdfApp:
             pady=36,
             font=("Segoe UI", 11),
         )
+        self.drop_zone_default_bg = self.drop_zone.cget("bg")
         self.drop_zone.pack(fill=tk.X, pady=(0, 12))
-        self.drop_zone.drop_target_register(DND_FILES)
+        self.drop_zone.drop_target_register(DND_ALL)
+        self.drop_zone.dnd_bind("<<DropEnter>>", self._on_drop_enter)
+        self.drop_zone.dnd_bind("<<DropPosition>>", self._on_drop_position)
+        self.drop_zone.dnd_bind("<<DropLeave>>", self._on_drop_leave)
         self.drop_zone.dnd_bind("<<Drop>>", self._on_drop)
 
         list_frame = ttk.Frame(container)
@@ -93,24 +101,69 @@ class MsgToPdfApp:
         if not selected_indexes:
             return
         for index in selected_indexes:
+            removed_path = self.selected_files[index]
             del self.selected_files[index]
+            self._delete_temp_file_if_managed(removed_path)
         self._refresh_file_list()
 
     def _clear_files(self) -> None:
+        self._delete_managed_temp_files(self.selected_files)
         self.selected_files.clear()
         self._refresh_file_list()
 
-    def _on_drop(self, event: object) -> None:
-        raw_data = getattr(event, "data", "")
-        path_strings = self.root.tk.splitlist(raw_data)
-        candidates = [Path(value) for value in path_strings]
-        self._add_files(candidates)
+    def _on_drop_enter(self, _: object) -> str:
+        self.drop_zone.configure(bg="#e3eaef")
+        return COPY
 
-    def _add_files(self, candidates: list[Path]) -> None:
+    def _on_drop_position(self, _: object) -> str:
+        return COPY
+
+    def _on_drop_leave(self, _: object) -> None:
+        self.drop_zone.configure(bg=self.drop_zone_default_bg)
+
+    def _on_drop(self, event: object) -> str:
+        self.drop_zone.configure(bg=self.drop_zone_default_bg)
+        raw_data = getattr(event, "data", "")
+        sourcetypes = getattr(event, "sourcetypes", ())
+
+        candidates = parse_drop_paths(raw_data, self.root.tk.splitlist)
+        added_count = self._add_files(candidates, is_temp_outlook_file=False, show_empty_status=False)
+        if added_count > 0:
+            return COPY
+
+        if is_likely_outlook_drop(raw_data, sourcetypes) or not candidates:
+            remaining_slots = MAX_FILES_PER_BATCH - len(self.selected_files)
+            outlook_temp_files = extract_selected_outlook_messages(remaining_slots)
+            outlook_added = self._add_files(
+                outlook_temp_files,
+                is_temp_outlook_file=True,
+                show_empty_status=False,
+            )
+            if outlook_added > 0:
+                self.status_var.set(
+                    f"Added {outlook_added} message(s) from Classic Outlook selection."
+                )
+                return COPY
+
+        self.status_var.set("No new .msg files added.")
+        return COPY
+
+    def _add_files(
+        self,
+        candidates: list[Path],
+        *,
+        is_temp_outlook_file: bool = False,
+        show_empty_status: bool = True,
+    ) -> int:
         msg_candidates = []
         for path in candidates:
-            if path.suffix.lower() == ".msg":
-                msg_candidates.append(path)
+            candidate = wait_for_materialized_file(path)
+            if not candidate.exists():
+                continue
+            if candidate.exists() and candidate.is_dir():
+                continue
+            if is_supported_msg_candidate(candidate):
+                msg_candidates.append(candidate)
 
         existing = {path.resolve() for path in self.selected_files}
         unique_candidates = []
@@ -121,14 +174,17 @@ class MsgToPdfApp:
                 existing.add(resolved)
 
         if not unique_candidates:
-            self.status_var.set("No new .msg files added.")
-            return
+            if show_empty_status:
+                self.status_var.set("No new .msg files added.")
+            return 0
 
         available_slots = MAX_FILES_PER_BATCH - len(self.selected_files)
         accepted = unique_candidates[: max(available_slots, 0)]
         ignored_count = len(unique_candidates) - len(accepted)
 
         self.selected_files.extend(accepted)
+        if is_temp_outlook_file:
+            self.temp_outlook_files.update(accepted)
         self._refresh_file_list()
 
         if ignored_count > 0:
@@ -137,6 +193,8 @@ class MsgToPdfApp:
                 f"Only {MAX_FILES_PER_BATCH} files can be converted at once. "
                 f"Ignored {ignored_count} file(s).",
             )
+
+        return len(accepted)
 
     def _refresh_file_list(self) -> None:
         self.file_listbox.delete(0, tk.END)
@@ -175,6 +233,24 @@ class MsgToPdfApp:
         else:
             messagebox.showwarning("No Files Converted", "\n".join(summary))
         self.status_var.set(summary[0])
+
+    def _on_close(self) -> None:
+        self._delete_managed_temp_files(self.temp_outlook_files)
+        self.root.destroy()
+
+    def _delete_managed_temp_files(self, paths: list[Path] | set[Path]) -> None:
+        for path in list(paths):
+            self._delete_temp_file_if_managed(path)
+
+    def _delete_temp_file_if_managed(self, path: Path) -> None:
+        if path not in self.temp_outlook_files:
+            return
+        try:
+            if path.exists():
+                path.unlink()
+        except Exception:
+            pass
+        self.temp_outlook_files.discard(path)
 
 
 def main() -> None:

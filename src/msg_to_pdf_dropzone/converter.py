@@ -31,7 +31,7 @@ def convert_msg_files(msg_paths: list[Path], output_dir: Path) -> ConversionResu
 
     email_records = []
     for msg_path in msg_paths:
-        if msg_path.suffix.lower() != ".msg":
+        if msg_path.suffix and msg_path.suffix.lower() != ".msg":
             result.skipped_files.append(msg_path)
             result.errors.append(f"Skipped non-msg file: {msg_path.name}")
             continue

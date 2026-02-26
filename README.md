@@ -5,6 +5,7 @@ Windows desktop tool to drag and drop up to 10 Outlook `.msg` files and convert 
 ## What it does
 
 - Accepts dragged `.msg` files (or manual file selection).
+- Supports dragging selected messages directly from Classic Outlook.
 - Converts each email to one PDF.
 - Names each PDF as:
   - `YYYY-MM-DD <email subject>.pdf`
@@ -50,3 +51,4 @@ pytest
 - Maximum input files per batch is 10.
 - Filenames are sanitized for Windows.
 - If multiple outputs would have the same name, a numeric suffix is added.
+- Outlook drag handling uses COM to export selected items to temporary `.msg` files when direct file paths are not provided.
