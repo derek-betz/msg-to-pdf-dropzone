@@ -1,0 +1,52 @@
+# MSG to PDF Dropzone
+
+Windows desktop tool to drag and drop up to 10 Outlook `.msg` files and convert each message into one PDF.
+
+## What it does
+
+- Accepts dragged `.msg` files (or manual file selection).
+- Converts each email to one PDF.
+- Names each PDF as:
+  - `YYYY-MM-DD <email subject>.pdf`
+  - `YYYY-MM-DD` is the latest email date found among dropped emails in the same thread.
+- Prompts you to select the save folder before conversion.
+
+## Requirements
+
+- Windows
+- Python 3.10+
+- Outlook `.msg` files
+
+## Install
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -e .
+```
+
+## Run
+
+```powershell
+python -m msg_to_pdf_dropzone
+```
+
+Or:
+
+```powershell
+msg-to-pdf-dropzone
+```
+
+## Run tests
+
+```powershell
+python -m pip install pytest
+pytest
+```
+
+## Notes
+
+- Maximum input files per batch is 10.
+- Filenames are sanitized for Windows.
+- If multiple outputs would have the same name, a numeric suffix is added.
