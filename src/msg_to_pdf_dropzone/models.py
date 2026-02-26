@@ -14,5 +14,6 @@ class EmailRecord:
     to: str
     cc: str
     body: str
+    html_body: str
     attachment_names: list[str]
     thread_key: str

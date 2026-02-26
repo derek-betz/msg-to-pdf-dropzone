@@ -30,6 +30,19 @@ def _as_text(value: object) -> str:
     return str(value).strip()
 
 
+def _as_html(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        for encoding in ("utf-8", "utf-16", "latin-1"):
+            try:
+                return value.decode(encoding).strip()
+            except UnicodeDecodeError:
+                continue
+        return value.decode("utf-8", errors="ignore").strip()
+    return str(value).strip()
+
+
 def parse_msg_file(msg_path: Path) -> EmailRecord:
     if msg_path.suffix and msg_path.suffix.lower() != ".msg":
         raise ValueError(f"Unsupported file type: {msg_path}")
@@ -55,6 +68,11 @@ def parse_msg_file(msg_path: Path) -> EmailRecord:
         body = _as_text(getattr(message, "body", ""))
         if not body:
             body = "(No plain text body found in source email.)"
+        html_body = (
+            _as_html(getattr(message, "htmlBody", None))
+            or _as_html(getattr(message, "html_body", None))
+            or _as_html(getattr(message, "html", None))
+        )
 
         return EmailRecord(
             source_path=msg_path,
@@ -64,6 +82,7 @@ def parse_msg_file(msg_path: Path) -> EmailRecord:
             to=_as_text(getattr(message, "to", "")),
             cc=_as_text(getattr(message, "cc", "")),
             body=body,
+            html_body=html_body,
             attachment_names=attachment_names,
             thread_key=normalize_thread_subject(subject),
         )

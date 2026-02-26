@@ -21,6 +21,7 @@ def _record(subject: str, sent_at: datetime) -> EmailRecord:
         to="to@example.com",
         cc="",
         body="Body",
+        html_body="",
         attachment_names=[],
         thread_key=normalize_thread_subject(subject),
     )

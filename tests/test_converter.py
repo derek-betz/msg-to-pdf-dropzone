@@ -32,6 +32,7 @@ def test_convert_msg_files_uses_latest_thread_date_for_filename(monkeypatch, tmp
         to="b@example.com",
         cc="",
         body="older",
+        html_body="",
         attachment_names=[],
         thread_key=normalize_thread_subject("Re: Sample Thread"),
     )
@@ -43,6 +44,7 @@ def test_convert_msg_files_uses_latest_thread_date_for_filename(monkeypatch, tmp
         to="b@example.com",
         cc="",
         body="newer",
+        html_body="",
         attachment_names=[],
         thread_key=normalize_thread_subject("Sample Thread"),
     )

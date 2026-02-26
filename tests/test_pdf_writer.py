@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from msg_to_pdf_dropzone.models import EmailRecord
-from msg_to_pdf_dropzone.pdf_writer import write_email_pdf
+from msg_to_pdf_dropzone.pdf_writer import build_email_html_document, write_email_pdf
 from msg_to_pdf_dropzone.thread_logic import normalize_thread_subject
 
 
@@ -17,6 +17,7 @@ def test_write_email_pdf_creates_nonempty_file(tmp_path: Path) -> None:
         to="to@example.com",
         cc="cc@example.com",
         body="Hello\n\nThis is a test body.",
+        html_body="",
         attachment_names=["doc.txt"],
         thread_key=normalize_thread_subject("Test Subject"),
     )
@@ -26,3 +27,24 @@ def test_write_email_pdf_creates_nonempty_file(tmp_path: Path) -> None:
 
     assert output_file.exists()
     assert output_file.stat().st_size > 0
+
+
+def test_build_email_html_document_prefers_html_body_fragment() -> None:
+    record = EmailRecord(
+        source_path=Path("sample.msg"),
+        subject="Sample Subject",
+        sent_at=datetime(2026, 2, 20, 12, 0, tzinfo=timezone.utc),
+        sender="sender@example.com",
+        to="to@example.com",
+        cc="",
+        body="Plain text fallback",
+        html_body="<html><body><p><b>Rich</b> body</p></body></html>",
+        attachment_names=["file-a.xlsx"],
+        thread_key=normalize_thread_subject("Sample Subject"),
+    )
+
+    html_document = build_email_html_document(record)
+
+    assert "<b>Rich</b> body" in html_document
+    assert "Sample Subject" in html_document
+    assert "file-a.xlsx" in html_document
