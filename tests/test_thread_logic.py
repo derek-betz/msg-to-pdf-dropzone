@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from msg_to_pdf_dropzone.models import EmailRecord
@@ -38,10 +38,20 @@ def test_get_latest_thread_dates_uses_latest_date_per_thread() -> None:
         _record("Budget", datetime(2026, 1, 12, tzinfo=timezone.utc)),
     ]
 
-    latest = get_latest_thread_dates(records)
+    latest = get_latest_thread_dates(records, local_tz=timezone.utc)
 
     assert latest["weekly sync"].isoformat() == "2026-01-15"
     assert latest["budget"].isoformat() == "2026-01-12"
+
+
+def test_get_latest_thread_dates_uses_local_calendar_day_when_requested() -> None:
+    records = [
+        _record("Weekly Sync", datetime(2026, 1, 16, 1, 0, tzinfo=timezone.utc)),
+    ]
+
+    latest = get_latest_thread_dates(records, local_tz=timezone(timedelta(hours=-5)))
+
+    assert latest["weekly sync"].isoformat() == "2026-01-15"
 
 
 def test_build_pdf_filename_prefixes_date_and_sanitizes_subject() -> None:

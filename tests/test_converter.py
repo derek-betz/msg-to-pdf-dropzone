@@ -5,7 +5,7 @@ from pathlib import Path
 
 from msg_to_pdf_dropzone.converter import ConversionError, convert_msg_files
 from msg_to_pdf_dropzone.models import EmailRecord
-from msg_to_pdf_dropzone.thread_logic import normalize_thread_subject
+from msg_to_pdf_dropzone.thread_logic import get_latest_thread_dates, normalize_thread_subject
 
 
 def test_convert_msg_files_enforces_batch_limit(tmp_path: Path) -> None:
@@ -64,4 +64,6 @@ def test_convert_msg_files_uses_latest_thread_date_for_filename(monkeypatch, tmp
     result = convert_msg_files([email_one, email_two], tmp_path)
 
     assert len(result.converted_files) == 2
-    assert all(path.name.startswith("2026-01-05_") for path in result.converted_files)
+    expected_latest = get_latest_thread_dates([older, newer])[newer.thread_key]
+    expected_prefix = f"{expected_latest:%Y-%m-%d}_"
+    assert all(path.name.startswith(expected_prefix) for path in result.converted_files)

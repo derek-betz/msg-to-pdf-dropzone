@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from datetime import date
+from datetime import date, datetime, tzinfo
 from pathlib import Path
 
 from .models import EmailRecord
@@ -16,10 +16,19 @@ def normalize_thread_subject(subject: str) -> str:
     return clean_subject or "no-subject"
 
 
-def get_latest_thread_dates(records: list[EmailRecord]) -> dict[str, date]:
+def get_local_calendar_date(sent_at: datetime, local_tz: tzinfo | None = None) -> date:
+    try:
+        if local_tz is None:
+            return sent_at.astimezone().date()
+        return sent_at.astimezone(local_tz).date()
+    except Exception:
+        return sent_at.date()
+
+
+def get_latest_thread_dates(records: list[EmailRecord], local_tz: tzinfo | None = None) -> dict[str, date]:
     latest_dates: dict[str, date] = {}
     for record in records:
-        message_date = record.sent_at.date()
+        message_date = get_local_calendar_date(record.sent_at, local_tz)
         current = latest_dates.get(record.thread_key)
         if current is None or message_date > current:
             latest_dates[record.thread_key] = message_date
