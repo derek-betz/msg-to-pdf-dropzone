@@ -67,3 +67,53 @@ def test_convert_msg_files_uses_latest_thread_date_for_filename(monkeypatch, tmp
     expected_latest = get_latest_thread_dates([older, newer])[newer.thread_key]
     expected_prefix = f"{expected_latest:%Y-%m-%d}_"
     assert all(path.name.startswith(expected_prefix) for path in result.converted_files)
+
+
+def test_convert_msg_files_populates_timing_lines(monkeypatch, tmp_path: Path) -> None:
+    email_path = tmp_path / "one.msg"
+    email_path.touch()
+
+    record = EmailRecord(
+        source_path=email_path,
+        subject="Timing Test",
+        sent_at=datetime(2026, 1, 6, tzinfo=timezone.utc),
+        sender="a@example.com",
+        to="b@example.com",
+        cc="",
+        body="body",
+        html_body="",
+        attachment_names=[],
+        thread_key=normalize_thread_subject("Timing Test"),
+    )
+
+    def fake_parse(path: Path) -> EmailRecord:
+        return record
+
+    def fake_write(_record: EmailRecord, output_path: Path, *, diagnostics=None) -> Path:
+        output_path.write_text("ok", encoding="utf-8")
+        if diagnostics is not None:
+            diagnostics.pipeline = "fake_pipeline"
+            diagnostics.stage_seconds["fake_stage"] = 0.01
+            diagnostics.image_metrics["total_images"] = 2
+            diagnostics.image_metrics["cid_resolved"] = 1
+            diagnostics.total_seconds = 0.01
+        return output_path
+
+    monkeypatch.setattr("msg_to_pdf_dropzone.converter.parse_msg_file", fake_parse)
+    monkeypatch.setattr("msg_to_pdf_dropzone.converter.write_email_pdf", fake_write)
+
+    result = convert_msg_files([email_path], tmp_path)
+
+    assert result.total_seconds >= 0.0
+    assert result.parse_seconds >= 0.0
+    assert result.write_seconds >= 0.0
+    assert result.timing_lines
+    assert "Total " in result.timing_lines[0]
+    assert any("one.msg:" in line for line in result.timing_lines)
+    assert any("pipeline fake_pipeline" in line for line in result.timing_lines)
+    assert any("images total_images 2" in line for line in result.timing_lines)
+    assert len(result.file_timing_records) == 1
+    assert result.file_timing_records[0].file_name == "one.msg"
+    assert result.file_timing_records[0].pipeline == "fake_pipeline"
+    assert result.file_timing_records[0].stage_seconds["fake_stage"] == 0.01
+    assert result.file_timing_records[0].image_metrics["total_images"] == 2

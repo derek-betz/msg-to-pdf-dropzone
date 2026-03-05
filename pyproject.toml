@@ -17,6 +17,7 @@ dependencies = [
 
 [project.scripts]
 msg-to-pdf-dropzone = "msg_to_pdf_dropzone.app:main"
+msg-to-pdf-corpus-profile = "msg_to_pdf_dropzone.corpus_profiler:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

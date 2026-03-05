@@ -47,6 +47,27 @@ python -m pip install pytest
 pytest
 ```
 
+## Profile sample corpus
+
+Run a local corpus profile against `emails-for-testing` and generate JSON + Markdown summaries:
+
+```powershell
+python -m msg_to_pdf_dropzone.corpus_profiler --runs 3 --emails-dir .\emails-for-testing
+```
+
+Reports are written under `.local-corpus-profiles\profile-<timestamp>\`.
+
+## Render strategy (local tuning)
+
+- Default (`fidelity`): Outlook MHTML + Edge first, then HTML + Edge, then ReportLab.
+- Optional (`fast`): skips Outlook render stage for faster comparisons.
+
+Set strategy for one shell session:
+
+```powershell
+$env:MSG_TO_PDF_RENDER_STRATEGY='fast'
+```
+
 ## Notes
 
 - Maximum input files per batch is 10.
