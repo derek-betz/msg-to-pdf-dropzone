@@ -13,6 +13,7 @@ dependencies = [
   "reportlab>=4.2.0,<5.0.0",
   "tkinterdnd2>=0.4.2,<1.0.0",
   "pywin32>=306; platform_system == 'Windows'",
+  "pywebview>=5.1,<6.0; platform_system == 'Windows'",
 ]
 
 [project.scripts]
@@ -24,6 +25,12 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+msg_to_pdf_dropzone = [
+  "theater_assets/*",
+  "theater_assets/assets/*",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

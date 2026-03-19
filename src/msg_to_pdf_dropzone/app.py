@@ -7,12 +7,21 @@ from pathlib import Path
 from time import perf_counter
 from tkinter import filedialog, messagebox, ttk
 from typing import Callable
+from uuid import uuid4
 
 from tkinterdnd2 import COPY, DND_ALL, TkinterDnD
 
 from .converter import MAX_FILES_PER_BATCH, ConversionError, ConversionResult, convert_msg_files
 from .drop_helpers import is_supported_msg_candidate, parse_drop_paths, wait_for_materialized_file
 from .outlook_selection import extract_selected_outlook_messages, is_likely_outlook_drop
+from .task_events import (
+    TaskEventSink,
+    TaskMetaValue,
+    TaskStage,
+    default_task_id_for_path,
+    emit_task_event,
+)
+from .theater_host import TheaterController
 
 DROP_UI_READY_TARGET_SECONDS = 2.0
 DEFAULT_DROP_MATERIALIZATION_TIMEOUT_SECONDS = 0.10
@@ -20,10 +29,17 @@ HEARTBEAT_INTERVAL_MS = 50
 
 
 class MsgToPdfApp:
-    def __init__(self, root: TkinterDnD.Tk) -> None:
+    def __init__(
+        self,
+        root: TkinterDnD.Tk,
+        event_sink: TaskEventSink | None = None,
+        theater_controller: TheaterController | None = None,
+    ) -> None:
         self.root = root
         self.selected_files: list[Path] = []
         self.temp_outlook_files: set[Path] = set()
+        self._event_sink = event_sink
+        self._theater_controller = theater_controller
 
         self.root.title("MSG to PDF Dropzone")
         self.root.geometry("780x520")
@@ -43,7 +59,10 @@ class MsgToPdfApp:
         self._last_operation_max_stall_seconds = 0.0
 
         self._build_ui()
+        self._update_theater_button()
         self._schedule_heartbeat()
+        if self._should_open_theater_on_launch():
+            self.root.after(0, self._open_theater_on_launch)
 
     def _build_ui(self) -> None:
         container = ttk.Frame(self.root, padding=14)
@@ -104,6 +123,8 @@ class MsgToPdfApp:
         self.remove_button.pack(side=tk.LEFT, padx=(8, 0))
         self.clear_button = ttk.Button(button_row, text="Clear", command=self._clear_files)
         self.clear_button.pack(side=tk.LEFT, padx=(8, 0))
+        self.theater_button = ttk.Button(button_row, text="Open Theater", command=self._toggle_theater)
+        self.theater_button.pack(side=tk.LEFT, padx=(8, 0))
         self.convert_button = ttk.Button(button_row, text="Convert to PDF", command=self._convert)
         self.convert_button.pack(side=tk.RIGHT)
 
@@ -141,6 +162,7 @@ class MsgToPdfApp:
             if stall_seconds > self._active_operation_max_stall_seconds:
                 self._active_operation_max_stall_seconds = stall_seconds
 
+        self._update_theater_button()
         self._heartbeat_job_id = self.root.after(HEARTBEAT_INTERVAL_MS, self._on_heartbeat_tick)
 
     def _begin_operation_diagnostics(self, operation_name: str) -> None:
@@ -263,6 +285,7 @@ class MsgToPdfApp:
                 is_temp_outlook_file=False,
                 show_empty_status=False,
                 materialization_timeout_seconds=materialization_timeout_seconds,
+                emit_drop_received=True,
             )
             if added_count > 0:
                 return COPY
@@ -293,11 +316,20 @@ class MsgToPdfApp:
                     elif isinstance(result, list):
                         outlook_temp_files = [path for path in result if isinstance(path, Path)]
 
+                    existing_before = {path.resolve() for path in self.selected_files}
                     outlook_added = self._add_files(
                         outlook_temp_files,
                         is_temp_outlook_file=True,
                         show_empty_status=False,
+                        emit_files_accepted=False,
                     )
+                    accepted_paths = [
+                        path
+                        for path in self.selected_files
+                        if path.resolve() not in existing_before
+                    ]
+                    self._emit_stage_for_paths(accepted_paths, "outlook_extract_started")
+                    self._emit_stage_for_paths(accepted_paths, "files_accepted")
                     if outlook_added > 0:
                         stall_ms = int(self._last_operation_max_stall_seconds * 1000)
                         self.status_var.set(
@@ -337,6 +369,8 @@ class MsgToPdfApp:
         is_temp_outlook_file: bool = False,
         show_empty_status: bool = True,
         materialization_timeout_seconds: float = 2.0,
+        emit_drop_received: bool = False,
+        emit_files_accepted: bool = True,
     ) -> int:
         msg_candidates = []
         available_slots = MAX_FILES_PER_BATCH - len(self.selected_files)
@@ -371,6 +405,10 @@ class MsgToPdfApp:
         if is_temp_outlook_file:
             self.temp_outlook_files.update(accepted)
         self._refresh_file_list()
+        if emit_drop_received:
+            self._emit_stage_for_paths(accepted, "drop_received")
+        if emit_files_accepted:
+            self._emit_stage_for_paths(accepted, "files_accepted")
 
         if ignored_count > 0:
             messagebox.showwarning(
@@ -403,9 +441,34 @@ class MsgToPdfApp:
 
         selected_files = list(self.selected_files)
         output_path = Path(output_dir)
+        batch_meta_by_source_path = self._build_batch_meta_by_path(selected_files)
+        event_sink = self._current_event_sink()
+        for path in selected_files:
+            batch_meta = batch_meta_by_source_path[path.resolve()]
+            emit_task_event(
+                event_sink,
+                task_id=self._task_id_for_path(path),
+                stage="output_folder_selected",
+                file_name=path.name,
+                meta={
+                    **batch_meta,
+                    "outputDir": str(output_path),
+                    "outputDirLabel": output_path.name or str(output_path),
+                },
+            )
+        task_ids_by_source_path = {
+            path.resolve(): self._task_id_for_path(path)
+            for path in selected_files
+        }
 
         def _work() -> object:
-            return convert_msg_files(selected_files, output_path)
+            return convert_msg_files(
+                selected_files,
+                output_path,
+                event_sink=self._current_event_sink(),
+                task_ids_by_source_path=task_ids_by_source_path,
+                batch_meta_by_source_path=batch_meta_by_source_path,
+            )
 
         def _success(result: object) -> None:
             if not isinstance(result, ConversionResult):
@@ -473,6 +536,9 @@ class MsgToPdfApp:
                 pass
             self._heartbeat_job_id = None
         self._delete_managed_temp_files(self.temp_outlook_files)
+        theater_controller = getattr(self, "_theater_controller", None)
+        if theater_controller is not None:
+            theater_controller.shutdown()
         self.root.destroy()
 
     def _delete_managed_temp_files(self, paths: list[Path] | set[Path]) -> None:
@@ -489,8 +555,98 @@ class MsgToPdfApp:
             pass
         self.temp_outlook_files.discard(path)
 
+    def _task_id_for_path(self, path: Path) -> str:
+        return default_task_id_for_path(path)
+
+    def _emit_stage_for_paths(
+        self,
+        paths: list[Path],
+        stage: TaskStage,
+        *,
+        success: bool | None = None,
+        error: str | None = None,
+        meta: dict[str, TaskMetaValue] | None = None,
+    ) -> None:
+        event_sink = self._current_event_sink()
+        if event_sink is None:
+            return
+        for path in paths:
+            emit_task_event(
+                event_sink,
+                task_id=self._task_id_for_path(path),
+                stage=stage,
+                file_name=path.name,
+                success=success,
+                error=error,
+                meta=meta,
+            )
+
+    def _build_batch_meta_by_path(self, paths: list[Path]) -> dict[Path, dict[str, TaskMetaValue]]:
+        batch_id = f"msg-batch-{uuid4().hex[:12]}"
+        batch_size = len(paths)
+        return {
+            path.resolve(): {
+                "batchId": batch_id,
+                "batchSize": batch_size,
+                "batchIndex": index + 1,
+            }
+            for index, path in enumerate(paths)
+        }
+
+    def _current_event_sink(self) -> TaskEventSink | None:
+        theater_controller = getattr(self, "_theater_controller", None)
+        if theater_controller is not None and theater_controller.event_sink is not None:
+            return theater_controller.event_sink
+        return getattr(self, "_event_sink", None)
+
+    def _should_open_theater_on_launch(self) -> bool:
+        theater_controller = getattr(self, "_theater_controller", None)
+        if theater_controller is None:
+            return False
+        return theater_controller.should_open_on_launch()
+
+    def _open_theater_on_launch(self) -> None:
+        theater_controller = getattr(self, "_theater_controller", None)
+        if theater_controller is None:
+            return
+        theater_controller.open()
+        self._update_theater_button()
+
+    def _toggle_theater(self) -> None:
+        theater_controller = getattr(self, "_theater_controller", None)
+        if theater_controller is None:
+            self.status_var.set("Theater integration is unavailable.")
+            return
+
+        if theater_controller.is_open:
+            theater_controller.close()
+            theater_controller.set_persisted_open(False)
+            self.status_var.set("Theater closed.")
+            self._update_theater_button()
+            return
+
+        if not theater_controller.open():
+            self.status_var.set("Theater assets are unavailable. Build the theater runtime first.")
+            self._update_theater_button()
+            return
+
+        theater_controller.set_persisted_open(True)
+        self.status_var.set("Theater opened.")
+        self._update_theater_button()
+
+    def _update_theater_button(self) -> None:
+        button = getattr(self, "theater_button", None)
+        if button is None:
+            return
+        theater_controller = getattr(self, "_theater_controller", None)
+        if theater_controller is None:
+            button.configure(text="Theater Unavailable")
+            return
+        button.configure(text="Close Theater" if theater_controller.is_open else "Open Theater")
+
 
 def main() -> None:
     root = TkinterDnD.Tk()
-    MsgToPdfApp(root)
+    theater_controller = TheaterController()
+    MsgToPdfApp(root, theater_controller=theater_controller)
     root.mainloop()

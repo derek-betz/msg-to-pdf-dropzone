@@ -8,5 +8,6 @@ dist/
 build/
 *.egg-info/
 *.log
+.tmp-*.jsonl
 .local-corpus-profiles/
 emails-for-testing/

@@ -2,7 +2,47 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from types import SimpleNamespace
+import sys
+from types import ModuleType, SimpleNamespace
+
+tkinter_stub = ModuleType("tkinter")
+tkinter_stub.DISABLED = "disabled"
+tkinter_stub.NORMAL = "normal"
+tkinter_stub.BOTH = "both"
+tkinter_stub.LEFT = "left"
+tkinter_stub.RIGHT = "right"
+tkinter_stub.X = "x"
+tkinter_stub.Y = "y"
+tkinter_stub.END = "end"
+tkinter_stub.EXTENDED = "extended"
+tkinter_stub.GROOVE = "groove"
+tkinter_stub.W = "w"
+tkinter_stub.VERTICAL = "vertical"
+tkinter_stub.StringVar = object
+tkinter_stub.Label = object
+tkinter_stub.Listbox = object
+tkinter_stub.filedialog = SimpleNamespace(
+    askdirectory=lambda **_: "",
+    askopenfilenames=lambda **_: (),
+)
+tkinter_stub.messagebox = SimpleNamespace(
+    showerror=lambda *_, **__: None,
+    showinfo=lambda *_, **__: None,
+    showwarning=lambda *_, **__: None,
+)
+tkinter_stub.ttk = SimpleNamespace(
+    Button=object,
+    Frame=object,
+    Label=object,
+    Scrollbar=object,
+)
+sys.modules.setdefault("tkinter", tkinter_stub)
+
+tkinterdnd2_stub = ModuleType("tkinterdnd2")
+tkinterdnd2_stub.COPY = "copy"
+tkinterdnd2_stub.DND_ALL = "dnd_all"
+tkinterdnd2_stub.TkinterDnD = SimpleNamespace(Tk=object)
+sys.modules.setdefault("tkinterdnd2", tkinterdnd2_stub)
 
 import msg_to_pdf_dropzone.app as app_module
 
@@ -124,6 +164,8 @@ def test_on_drop_non_outlook_uses_small_timeout(monkeypatch) -> None:
 
 def test_on_drop_updates_selected_list_quickly_for_real_file(tmp_path: Path) -> None:
     app = _build_app_for_drop_tests()
+    events = []
+    app._event_sink = events.append
     app._run_in_background = lambda **_: (_ for _ in ()).throw(
         AssertionError("Background Outlook path should not run for normal file drop.")
     )
@@ -137,6 +179,7 @@ def test_on_drop_updates_selected_list_quickly_for_real_file(tmp_path: Path) -> 
     assert app.selected_files == [msg_path.resolve()]
     assert app.file_listbox.items == [str(msg_path.resolve())]
     assert app._drop_dispatch_seconds < app_module.DROP_UI_READY_TARGET_SECONDS
+    assert [event.stage for event in events] == ["drop_received", "files_accepted"]
 
 
 def test_heartbeat_tick_records_stall_for_active_operation() -> None:

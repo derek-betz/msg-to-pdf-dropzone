@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 import base64
 from dataclasses import dataclass, field
 import os
@@ -18,6 +19,7 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 
 from .models import EmailRecord, InlineImageAsset
+from .task_events import TaskEventSink, TaskMetaValue, default_task_id_for_path, emit_task_event
 
 BLANK_LINE_PATTERN = re.compile(r"\n\s*\n")
 SCRIPT_TAG_PATTERN = re.compile(r"(?is)<script[^>]*>.*?</script>")
@@ -575,8 +577,12 @@ def write_email_pdf(
     output_path: Path,
     *,
     diagnostics: PdfWriteDiagnostics | None = None,
+    event_sink: TaskEventSink | None = None,
+    task_id: str | None = None,
+    event_meta: Mapping[str, TaskMetaValue] | None = None,
 ) -> Path:
     started_at = perf_counter()
+    resolved_task_id = task_id or default_task_id_for_path(record.source_path)
     if diagnostics is not None:
         diagnostics.pipeline = ""
         diagnostics.total_seconds = 0.0
@@ -594,6 +600,14 @@ def write_email_pdf(
         diagnostics.stage_seconds["auto_cid_html"] = 1.0 if prefer_cid_html else 0.0
 
     if render_strategy == RENDER_STRATEGY_FIDELITY:
+        emit_task_event(
+            event_sink,
+            task_id=resolved_task_id,
+            stage="pipeline_selected",
+            file_name=record.source_path.name,
+            pipeline="outlook_edge",
+            meta=_merge_event_meta(event_meta, {"outputName": output_path.name}),
+        )
         stage_started_at = perf_counter()
         if _try_write_pdf_via_outlook_and_edge(record.source_path, output_path):
             if diagnostics is not None:
@@ -611,6 +625,14 @@ def write_email_pdf(
     if diagnostics is not None:
         diagnostics.stage_seconds["build_html"] = perf_counter() - stage_started_at
 
+    emit_task_event(
+        event_sink,
+        task_id=resolved_task_id,
+        stage="pipeline_selected",
+        file_name=record.source_path.name,
+        pipeline="edge_html",
+        meta=_merge_event_meta(event_meta, {"outputName": output_path.name}),
+    )
     stage_started_at = perf_counter()
     if _try_write_pdf_via_edge_html(html_document, output_path):
         if diagnostics is not None:
@@ -621,6 +643,14 @@ def write_email_pdf(
     if diagnostics is not None:
         diagnostics.stage_seconds["edge_html"] = perf_counter() - stage_started_at
 
+    emit_task_event(
+        event_sink,
+        task_id=resolved_task_id,
+        stage="pipeline_selected",
+        file_name=record.source_path.name,
+        pipeline="reportlab",
+        meta=_merge_event_meta(event_meta, {"outputName": output_path.name}),
+    )
     stage_started_at = perf_counter()
     _write_pdf_via_reportlab(record, output_path)
     if diagnostics is not None:
@@ -628,3 +658,15 @@ def write_email_pdf(
         diagnostics.stage_seconds["reportlab"] = perf_counter() - stage_started_at
         diagnostics.total_seconds = perf_counter() - started_at
     return output_path
+
+
+def _merge_event_meta(
+    base_meta: Mapping[str, TaskMetaValue] | None,
+    extra_meta: Mapping[str, TaskMetaValue] | None,
+) -> dict[str, TaskMetaValue] | None:
+    merged: dict[str, TaskMetaValue] = {}
+    if base_meta:
+        merged.update(base_meta)
+    if extra_meta:
+        merged.update(extra_meta)
+    return merged or None

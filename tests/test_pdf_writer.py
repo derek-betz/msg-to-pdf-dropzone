@@ -169,6 +169,56 @@ def test_write_email_pdf_fast_strategy_skips_outlook_stage(monkeypatch, tmp_path
     assert diagnostics.stage_seconds["outlook_edge"] == 0.0
 
 
+def test_write_email_pdf_emits_pipeline_selection_events(monkeypatch, tmp_path: Path) -> None:
+    record = EmailRecord(
+        source_path=tmp_path / "sample.msg",
+        subject="Pipeline Events",
+        sent_at=datetime(2026, 2, 20, 12, 0, tzinfo=timezone.utc),
+        sender="sender@example.com",
+        to="to@example.com",
+        cc="",
+        body="Plain text body",
+        html_body="",
+        attachment_names=[],
+        thread_key=normalize_thread_subject("Pipeline Events"),
+    )
+    record.source_path.write_text("dummy", encoding="utf-8")
+
+    monkeypatch.setattr(pdf_writer, "_try_write_pdf_via_outlook_and_edge", lambda _msg, _out: False)
+    monkeypatch.setattr(pdf_writer, "_try_write_pdf_via_edge_html", lambda _html, _out: False)
+    monkeypatch.setattr(
+        pdf_writer,
+        "_write_pdf_via_reportlab",
+        lambda _record, output_path: output_path.write_bytes(b"%PDF-1.4\nfake\n"),
+    )
+
+    events = []
+    diagnostics = PdfWriteDiagnostics()
+    output_file = tmp_path / "events.pdf"
+    write_email_pdf(
+        record,
+        output_file,
+        diagnostics=diagnostics,
+        event_sink=events.append,
+        task_id="task-456",
+        event_meta={"batchId": "msg-batch-123", "batchSize": 4, "batchIndex": 1},
+    )
+
+    assert output_file.exists()
+    assert [event.stage for event in events] == [
+        "pipeline_selected",
+        "pipeline_selected",
+        "pipeline_selected",
+    ]
+    assert [event.pipeline for event in events] == [
+        "outlook_edge",
+        "edge_html",
+        "reportlab",
+    ]
+    assert all(event.task_id == "task-456" for event in events)
+    assert all(event.meta is not None and event.meta["batchId"] == "msg-batch-123" for event in events)
+
+
 def test_build_email_html_document_rewrites_cid_and_filters_signature_images() -> None:
     hero_image = InlineImageAsset(
         cid="hero-image",
