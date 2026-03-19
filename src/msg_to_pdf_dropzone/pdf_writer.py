@@ -331,16 +331,26 @@ def _prepare_html_body_fragment(
     return rewritten
 
 
-def _build_attachment_list_html(attachment_names: list[str]) -> str:
-    if not attachment_names:
-        return ""
-    items = "".join(f"<li>{escape(name)}</li>" for name in attachment_names)
-    return f"""
-    <section class="section attachments">
-      <h3>Attachments</h3>
-      <ul>{items}</ul>
-    </section>
-    """
+def _build_header_rows_html(record: EmailRecord) -> str:
+    rows = [
+        ("From:", record.sender or "(empty)"),
+        ("Sent:", _format_sent_value(record.sent_at)),
+        ("To:", record.to or "(empty)"),
+        ("Cc:", record.cc or "(empty)"),
+        ("Subject:", record.subject or "No Subject"),
+    ]
+    if record.attachment_names:
+        rows.append(("Attachments:", "\n".join(record.attachment_names)))
+
+    return "".join(
+        (
+            '<div class="header-row">'
+            f'<div class="header-label">{escape(label)}</div>'
+            f'<div class="header-value">{_as_paragraph_text(value)}</div>'
+            "</div>"
+        )
+        for label, value in rows
+    )
 
 
 def _build_body_fragment(record: EmailRecord, diagnostics: PdfWriteDiagnostics | None = None) -> str:
@@ -360,8 +370,7 @@ def build_email_html_document(
     diagnostics: PdfWriteDiagnostics | None = None,
 ) -> str:
     body_fragment = _build_body_fragment(record, diagnostics=diagnostics)
-    attachments_html = _build_attachment_list_html(record.attachment_names)
-    sent_value = escape(_format_sent_value(record.sent_at))
+    header_rows_html = _build_header_rows_html(record)
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -382,49 +391,30 @@ def build_email_html_document(
       font-size: 11pt;
       line-height: 1.35;
     }}
-    .meta {{
-      border: 1px solid #d1d5db;
-      border-radius: 6px;
-      margin-bottom: 16px;
-      overflow: hidden;
+    .message-header {{
+      margin: 0 0 14px;
+      padding: 0 0 12px;
+      border-bottom: 1px solid #d1d5db;
     }}
-    .meta-row {{
-      display: table;
-      width: 100%;
-      border-bottom: 1px solid #e5e7eb;
+    .header-row {{
+      display: grid;
+      grid-template-columns: 88px minmax(0, 1fr);
+      column-gap: 12px;
+      align-items: start;
+      margin: 0 0 6px;
     }}
-    .meta-row:last-child {{
-      border-bottom: none;
+    .header-row:last-child {{
+      margin-bottom: 0;
     }}
-    .meta-label {{
-      display: table-cell;
-      width: 86px;
-      padding: 8px 10px;
-      background: #f3f4f6;
+    .header-label {{
       font-weight: 700;
-      vertical-align: top;
     }}
-    .meta-value {{
-      display: table-cell;
-      padding: 8px 10px;
-      vertical-align: top;
+    .header-value {{
       word-break: break-word;
-    }}
-    .section {{
-      margin-top: 16px;
-    }}
-    .section h3 {{
-      margin: 0 0 8px;
-      font-size: 11pt;
-      color: #1f2937;
-    }}
-    .attachments ul {{
-      margin: 0;
-      padding-left: 20px;
+      white-space: pre-wrap;
     }}
     .body {{
-      border-top: 1px solid #d1d5db;
-      padding-top: 14px;
+      padding-top: 2px;
     }}
     .plain-body {{
       margin: 0;
@@ -443,30 +433,10 @@ def build_email_html_document(
   </style>
 </head>
 <body>
-  <section class="meta">
-    <div class="meta-row">
-      <div class="meta-label">Subject</div>
-      <div class="meta-value">{escape(record.subject or "No Subject")}</div>
-    </div>
-    <div class="meta-row">
-      <div class="meta-label">Sent</div>
-      <div class="meta-value">{sent_value}</div>
-    </div>
-    <div class="meta-row">
-      <div class="meta-label">From</div>
-      <div class="meta-value">{escape(record.sender or "(empty)")}</div>
-    </div>
-    <div class="meta-row">
-      <div class="meta-label">To</div>
-      <div class="meta-value">{escape(record.to or "(empty)")}</div>
-    </div>
-    <div class="meta-row">
-      <div class="meta-label">Cc</div>
-      <div class="meta-value">{escape(record.cc or "(empty)")}</div>
-    </div>
+  <section class="message-header">
+    {header_rows_html}
   </section>
-  {attachments_html}
-  <section class="section body">
+  <section class="body">
     {body_fragment}
   </section>
 </body>
@@ -498,6 +468,7 @@ def _print_web_document_via_edge(input_path: Path, output_path: Path) -> bool:
         str(edge_path),
         "--headless",
         "--disable-gpu",
+        "--no-pdf-header-footer",
         "--run-all-compositor-stages-before-draw",
         "--virtual-time-budget=10000",
         f"--print-to-pdf={output_path}",
@@ -575,30 +546,23 @@ def _write_pdf_via_reportlab(record: EmailRecord, output_path: Path) -> None:
     )
 
     story = [
-        Paragraph("<b>Email Export</b>", styles["Title"]),
-        Spacer(1, 14),
-        Paragraph(f"<b>Subject:</b> {_as_paragraph_text(record.subject or 'No Subject')}", normal_style),
+        Paragraph(f"<b>From:</b> {_as_paragraph_text(record.sender or '(empty)')}", normal_style),
         Spacer(1, 6),
         Paragraph(f"<b>Sent:</b> {_as_paragraph_text(_format_sent_value(record.sent_at))}", normal_style),
-        Spacer(1, 6),
-        Paragraph(f"<b>From:</b> {_as_paragraph_text(record.sender or '(empty)')}", normal_style),
         Spacer(1, 6),
         Paragraph(f"<b>To:</b> {_as_paragraph_text(record.to or '(empty)')}", normal_style),
         Spacer(1, 6),
         Paragraph(f"<b>Cc:</b> {_as_paragraph_text(record.cc or '(empty)')}", normal_style),
+        Spacer(1, 6),
+        Paragraph(f"<b>Subject:</b> {_as_paragraph_text(record.subject or 'No Subject')}", normal_style),
         Spacer(1, 12),
     ]
 
     if record.attachment_names:
-        story.append(Paragraph("<b>Attachments:</b>", normal_style))
-        story.append(Spacer(1, 4))
-        for attachment_name in record.attachment_names:
-            story.append(Paragraph(f"- {_as_paragraph_text(attachment_name)}", body_style))
-            story.append(Spacer(1, 2))
-        story.append(Spacer(1, 10))
+        attachments_text = "<br/>".join(_as_paragraph_text(name) for name in record.attachment_names)
+        story.append(Paragraph(f"<b>Attachments:</b> {attachments_text}", normal_style))
+        story.append(Spacer(1, 12))
 
-    story.append(Paragraph("<b>Body</b>", styles["Heading3"]))
-    story.append(Spacer(1, 6))
     for block in _format_body_blocks(record.body):
         story.append(Paragraph(_as_paragraph_text(block), body_style))
         story.append(Spacer(1, 10))
@@ -629,7 +593,7 @@ def write_email_pdf(
         )
         diagnostics.stage_seconds["auto_cid_html"] = 1.0 if prefer_cid_html else 0.0
 
-    if render_strategy == RENDER_STRATEGY_FIDELITY and not prefer_cid_html:
+    if render_strategy == RENDER_STRATEGY_FIDELITY:
         stage_started_at = perf_counter()
         if _try_write_pdf_via_outlook_and_edge(record.source_path, output_path):
             if diagnostics is not None:

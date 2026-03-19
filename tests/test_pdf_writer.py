@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import msg_to_pdf_dropzone.pdf_writer as pdf_writer
 from msg_to_pdf_dropzone.models import EmailRecord, InlineImageAsset
@@ -49,6 +50,16 @@ def test_build_email_html_document_prefers_html_body_fragment() -> None:
     assert "<b>Rich</b> body" in html_document
     assert "Sample Subject" in html_document
     assert "file-a.xlsx" in html_document
+    assert 'class="message-header"' in html_document
+    assert 'class="meta"' not in html_document
+    assert "Attachments</h3>" not in html_document
+    from_index = html_document.index(">From:</div>")
+    sent_index = html_document.index(">Sent:</div>")
+    to_index = html_document.index(">To:</div>")
+    cc_index = html_document.index(">Cc:</div>")
+    subject_index = html_document.index(">Subject:</div>")
+    attachments_index = html_document.index(">Attachments:</div>")
+    assert from_index < sent_index < to_index < cc_index < subject_index < attachments_index
 
 
 def test_write_email_pdf_prefers_outlook_edge_pipeline(monkeypatch, tmp_path: Path) -> None:
@@ -209,7 +220,7 @@ def test_build_email_html_document_rewrites_cid_and_filters_signature_images() -
     assert diagnostics.image_metrics["cid_unresolved"] == 0
 
 
-def test_write_email_pdf_auto_switches_to_cid_html_path(monkeypatch, tmp_path: Path) -> None:
+def test_write_email_pdf_falls_back_to_cid_html_after_outlook_attempt(monkeypatch, tmp_path: Path) -> None:
     record = EmailRecord(
         source_path=tmp_path / "sample.msg",
         subject="Auto CID",
@@ -234,11 +245,13 @@ def test_write_email_pdf_auto_switches_to_cid_html_path(monkeypatch, tmp_path: P
     record.source_path.write_text("dummy", encoding="utf-8")
 
     monkeypatch.setenv("MSG_TO_PDF_RENDER_STRATEGY", "fidelity")
-    monkeypatch.setattr(
-        pdf_writer,
-        "_try_write_pdf_via_outlook_and_edge",
-        lambda _msg, _out: (_ for _ in ()).throw(AssertionError("Outlook stage should be skipped.")),
-    )
+    attempted = {"outlook": 0}
+
+    def fake_outlook(_msg: Path, _out: Path) -> bool:
+        attempted["outlook"] += 1
+        return False
+
+    monkeypatch.setattr(pdf_writer, "_try_write_pdf_via_outlook_and_edge", fake_outlook)
 
     captured: dict[str, str] = {}
 
@@ -256,6 +269,38 @@ def test_write_email_pdf_auto_switches_to_cid_html_path(monkeypatch, tmp_path: P
     assert output_file.exists()
     assert diagnostics.pipeline == "edge_html"
     assert diagnostics.stage_seconds["auto_cid_html"] == 1.0
-    assert diagnostics.stage_seconds["outlook_edge"] == 0.0
+    assert attempted["outlook"] == 1
+    assert diagnostics.stage_seconds["outlook_edge"] >= 0.0
     assert diagnostics.image_metrics["cid_resolved"] == 1
     assert "data:image/png;base64," in captured["html"]
+
+
+def test_print_web_document_via_edge_disables_pdf_headers_and_footers(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    input_path = tmp_path / "sample.html"
+    input_path.write_text("<html><body><p>Hello</p></body></html>", encoding="utf-8")
+    output_path = tmp_path / "sample.pdf"
+
+    monkeypatch.setattr(pdf_writer.os, "name", "nt", raising=False)
+    monkeypatch.setattr(
+        pdf_writer,
+        "_find_edge_executable",
+        lambda: Path("C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"),
+    )
+
+    captured: dict[str, object] = {}
+
+    def fake_run(command: list[str], **_kwargs: object) -> SimpleNamespace:
+        captured["command"] = command
+        output_path.write_bytes(b"%PDF-1.4\nfake\n")
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(pdf_writer.subprocess, "run", fake_run)
+
+    assert pdf_writer._print_web_document_via_edge(input_path, output_path) is True
+    command = captured["command"]
+    assert isinstance(command, list)
+    assert "--no-pdf-header-footer" in command
+    assert any(part.startswith("--print-to-pdf=") for part in command)
