@@ -40,6 +40,7 @@ SIGNATURE_MARKER_PATTERN = re.compile(
 RENDER_STRATEGY_FIDELITY = "fidelity"
 RENDER_STRATEGY_FAST = "fast"
 REMOTE_IMAGE_SCHEMES = ("http://", "https://")
+INLINE_IMAGE_HTML_PREFERENCE_BYTES = 30 * 1024
 
 
 @dataclass(slots=True)
@@ -70,6 +71,10 @@ def _get_render_strategy() -> str:
 def _allow_remote_images() -> bool:
     raw_value = os.environ.get("MSG_TO_PDF_ALLOW_REMOTE_IMAGES", "").strip().lower()
     return raw_value in {"1", "true", "yes", "on"}
+
+
+def _prefer_html_for_inline_images(record: EmailRecord) -> bool:
+    return any(asset.size_bytes >= INLINE_IMAGE_HTML_PREFERENCE_BYTES for asset in record.inline_images)
 
 
 def _format_body_blocks(body: str) -> list[str]:
@@ -593,13 +598,15 @@ def write_email_pdf(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     render_strategy = _get_render_strategy()
     prefer_cid_html = bool(record.inline_images) and bool(record.html_body.strip())
+    prefer_html_first = prefer_cid_html and _prefer_html_for_inline_images(record)
     if diagnostics is not None:
         diagnostics.stage_seconds["render_strategy_fast"] = (
             1.0 if render_strategy == RENDER_STRATEGY_FAST else 0.0
         )
         diagnostics.stage_seconds["auto_cid_html"] = 1.0 if prefer_cid_html else 0.0
+        diagnostics.stage_seconds["prefer_html_inline_images"] = 1.0 if prefer_html_first else 0.0
 
-    if render_strategy == RENDER_STRATEGY_FIDELITY:
+    if render_strategy == RENDER_STRATEGY_FIDELITY and not prefer_html_first:
         emit_task_event(
             event_sink,
             task_id=resolved_task_id,
@@ -642,6 +649,25 @@ def write_email_pdf(
         return output_path
     if diagnostics is not None:
         diagnostics.stage_seconds["edge_html"] = perf_counter() - stage_started_at
+
+    if render_strategy == RENDER_STRATEGY_FIDELITY and prefer_html_first:
+        emit_task_event(
+            event_sink,
+            task_id=resolved_task_id,
+            stage="pipeline_selected",
+            file_name=record.source_path.name,
+            pipeline="outlook_edge",
+            meta=_merge_event_meta(event_meta, {"outputName": output_path.name}),
+        )
+        stage_started_at = perf_counter()
+        if _try_write_pdf_via_outlook_and_edge(record.source_path, output_path):
+            if diagnostics is not None:
+                diagnostics.pipeline = "outlook_edge"
+                diagnostics.stage_seconds["outlook_edge"] = perf_counter() - stage_started_at
+                diagnostics.total_seconds = perf_counter() - started_at
+            return output_path
+        if diagnostics is not None:
+            diagnostics.stage_seconds["outlook_edge"] = perf_counter() - stage_started_at
 
     emit_task_event(
         event_sink,

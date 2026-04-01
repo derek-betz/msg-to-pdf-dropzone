@@ -270,7 +270,10 @@ def test_build_email_html_document_rewrites_cid_and_filters_signature_images() -
     assert diagnostics.image_metrics["cid_unresolved"] == 0
 
 
-def test_write_email_pdf_falls_back_to_cid_html_after_outlook_attempt(monkeypatch, tmp_path: Path) -> None:
+def test_write_email_pdf_falls_back_to_cid_html_after_outlook_attempt_for_small_inline_images(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
     record = EmailRecord(
         source_path=tmp_path / "sample.msg",
         subject="Auto CID",
@@ -287,8 +290,8 @@ def test_write_email_pdf_falls_back_to_cid_html_after_outlook_attempt(monkeypatc
                 cid="hero",
                 mime_type="image/png",
                 filename="hero.png",
-                data=b"z" * (45 * 1024),
-                size_bytes=45 * 1024,
+                data=b"z" * (12 * 1024),
+                size_bytes=12 * 1024,
             )
         ],
     )
@@ -323,6 +326,56 @@ def test_write_email_pdf_falls_back_to_cid_html_after_outlook_attempt(monkeypatc
     assert diagnostics.stage_seconds["outlook_edge"] >= 0.0
     assert diagnostics.image_metrics["cid_resolved"] == 1
     assert "data:image/png;base64," in captured["html"]
+
+
+def test_write_email_pdf_prefers_html_first_for_large_inline_images(monkeypatch, tmp_path: Path) -> None:
+    record = EmailRecord(
+        source_path=tmp_path / "sample.msg",
+        subject="Large Inline Image",
+        sent_at=datetime(2026, 3, 4, 12, 0, tzinfo=timezone.utc),
+        sender="sender@example.com",
+        to="to@example.com",
+        cc="",
+        body="Body text",
+        html_body="<html><body><p>Hello</p><img src='cid:hero' width='800' height='600' /></body></html>",
+        attachment_names=[],
+        thread_key=normalize_thread_subject("Large Inline Image"),
+        inline_images=[
+            InlineImageAsset(
+                cid="hero",
+                mime_type="image/png",
+                filename="hero.png",
+                data=b"z" * (60 * 1024),
+                size_bytes=60 * 1024,
+            )
+        ],
+    )
+    record.source_path.write_text("dummy", encoding="utf-8")
+
+    call_order: list[str] = []
+
+    def fake_outlook(_msg: Path, _out: Path) -> bool:
+        call_order.append("outlook")
+        _out.write_bytes(b"%PDF-1.4\nfake-outlook\n")
+        return True
+
+    def fake_edge_html(html_document: str, output_path: Path) -> bool:
+        call_order.append("edge_html")
+        output_path.write_bytes(b"%PDF-1.4\nfake-edge\n")
+        return True
+
+    monkeypatch.setenv("MSG_TO_PDF_RENDER_STRATEGY", "fidelity")
+    monkeypatch.setattr(pdf_writer, "_try_write_pdf_via_outlook_and_edge", fake_outlook)
+    monkeypatch.setattr(pdf_writer, "_try_write_pdf_via_edge_html", fake_edge_html)
+
+    diagnostics = PdfWriteDiagnostics()
+    output_file = tmp_path / "large-inline.pdf"
+    write_email_pdf(record, output_file, diagnostics=diagnostics)
+
+    assert output_file.exists()
+    assert diagnostics.pipeline == "edge_html"
+    assert diagnostics.stage_seconds["prefer_html_inline_images"] == 1.0
+    assert call_order == ["edge_html"]
 
 
 def test_print_web_document_via_edge_disables_pdf_headers_and_footers(

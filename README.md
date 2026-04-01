@@ -59,6 +59,31 @@ python -m msg_to_pdf_dropzone.corpus_profiler --runs 3 --emails-dir .\emails-for
 
 Reports are written under `.local-corpus-profiles\profile-<timestamp>\`.
 
+## Validate golden corpus
+
+Validate the paired `.msg` + golden `.pdf` cases under `emails-for-testing` and write a semantic comparison report:
+
+```powershell
+python -m msg_to_pdf_dropzone.corpus_validator --cases-dir .\emails-for-testing
+```
+
+Or:
+
+```powershell
+msg-to-pdf-corpus-validate --cases-dir .\emails-for-testing
+```
+
+Optional flags:
+
+- `--case 7` to validate one numbered case folder
+- `--render-strategy fast` to compare fallback rendering behavior
+- `--output-root .\.local-corpus-profiles` to control report location
+- `--fail-on-warnings` to return a non-zero exit code when warning-only pagination or fallback cases are present
+
+This validator is Windows-oriented and environment-sensitive because conversion still depends on Outlook and Edge. It uses semantic checks rather than exact PDF byte matching, so expected differences like timezone wording, line wrapping, and address formatting are tolerated when the user-visible content still matches.
+
+The Markdown report groups issue codes by affected case IDs and includes a dedicated warning-only section, so it is easier to review pagination drift without treating it as a hard semantic failure by default.
+
 ## Render strategy (local tuning)
 
 - Default (`fidelity`): Outlook MHTML + Edge first, then HTML + Edge, then ReportLab.

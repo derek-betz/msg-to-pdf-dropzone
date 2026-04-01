@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
   "extract-msg>=0.45.0,<1.0.0",
+  "pypdf>=5.0.0,<6.0.0",
   "reportlab>=4.2.0,<5.0.0",
   "tkinterdnd2>=0.4.2,<1.0.0",
   "pywin32>=306; platform_system == 'Windows'",
@@ -19,6 +20,7 @@ dependencies = [
 [project.scripts]
 msg-to-pdf-dropzone = "msg_to_pdf_dropzone.app:main"
 msg-to-pdf-corpus-profile = "msg_to_pdf_dropzone.corpus_profiler:main"
+msg-to-pdf-corpus-validate = "msg_to_pdf_dropzone.corpus_validator:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
