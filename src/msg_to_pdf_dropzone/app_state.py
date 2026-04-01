@@ -19,11 +19,11 @@ def get_app_state_dir() -> Path:
     appdata = os.environ.get("APPDATA", "").strip()
     if appdata:
         return Path(appdata) / APP_STATE_DIR_NAME
-    if os.name == "nt":
-        return Path.home() / "AppData" / "Roaming" / APP_STATE_DIR_NAME
     xdg_config_home = os.environ.get("XDG_CONFIG_HOME", "").strip()
     if xdg_config_home:
         return Path(xdg_config_home) / APP_STATE_DIR_NAME
+    if os.name == "nt":
+        return Path.home() / "AppData" / "Roaming" / APP_STATE_DIR_NAME
     return Path.home() / ".config" / APP_STATE_DIR_NAME
 
 
