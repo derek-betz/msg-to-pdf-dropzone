@@ -11,7 +11,7 @@ from .pdf_writer import PdfWriteDiagnostics, write_email_pdf
 from .task_events import TaskEventSink, TaskMetaValue, default_task_id_for_path, emit_task_event
 from .thread_logic import build_pdf_filename, get_latest_thread_dates, make_unique_path
 
-MAX_FILES_PER_BATCH = 10
+MAX_FILES_PER_BATCH = 25
 
 
 class ConversionError(Exception):

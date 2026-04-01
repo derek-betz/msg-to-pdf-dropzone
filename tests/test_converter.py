@@ -10,13 +10,13 @@ from msg_to_pdf_dropzone.thread_logic import get_latest_thread_dates, normalize_
 
 
 def test_convert_msg_files_enforces_batch_limit(tmp_path: Path) -> None:
-    too_many = [tmp_path / f"{index}.msg" for index in range(11)]
+    too_many = [tmp_path / f"{index}.msg" for index in range(26)]
     try:
         convert_msg_files(too_many, tmp_path)
     except ConversionError as exc:
-        assert "up to 10 files" in str(exc)
+        assert "up to 25 files" in str(exc)
     else:
-        raise AssertionError("Expected ConversionError for >10 files")
+        raise AssertionError("Expected ConversionError for >25 files")
 
 
 def test_convert_msg_files_uses_latest_thread_date_for_filename(monkeypatch, tmp_path: Path) -> None:

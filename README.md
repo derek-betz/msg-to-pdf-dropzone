@@ -1,6 +1,6 @@
 # MSG to PDF Dropzone
 
-Windows desktop tool to drag and drop up to 10 Outlook `.msg` files and convert each message into one PDF.
+Windows desktop tool to drag and drop up to 25 Outlook `.msg` files and convert each message into one PDF.
 
 ## What it does
 
