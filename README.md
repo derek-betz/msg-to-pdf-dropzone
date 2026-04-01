@@ -78,11 +78,11 @@ Optional flags:
 - `--case 7` to validate one numbered case folder
 - `--render-strategy fast` to compare fallback rendering behavior
 - `--output-root .\.local-corpus-profiles` to control report location
-- `--fail-on-warnings` to return a non-zero exit code when warning-only pagination or fallback cases are present
+- `--fail-on-warnings` to return a non-zero exit code when actionable warnings such as fallback pipeline usage are present
 
 This validator is Windows-oriented and environment-sensitive because conversion still depends on Outlook and Edge. It uses semantic checks rather than exact PDF byte matching, so expected differences like timezone wording, line wrapping, and address formatting are tolerated when the user-visible content still matches.
 
-The Markdown report groups issue codes by affected case IDs and includes a dedicated warning-only section, so it is easier to review pagination drift without treating it as a hard semantic failure by default.
+Page-count drift is tracked as informational output by default, not as a warning, because pagination differences are acceptable when the semantic content still matches. The Markdown report groups issue codes by affected case IDs and includes dedicated warning-only and info-only sections so pagination drift stays visible without cluttering release-gate checks.
 
 ## Render strategy (local tuning)
 

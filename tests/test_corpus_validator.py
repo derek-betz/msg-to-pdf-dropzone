@@ -212,6 +212,7 @@ def test_validate_corpus_reports_clean_pass(monkeypatch, tmp_path: Path) -> None
     assert summary["passed_count"] == 1
     assert summary["failed_count"] == 0
     assert summary["strict_failed_count"] == 0
+    assert summary["info_case_count"] == 0
     assert json_path.exists()
     assert markdown_path.exists()
 
@@ -317,7 +318,7 @@ def test_validate_corpus_fails_on_low_body_anchor_recall(monkeypatch, tmp_path: 
     assert any(issue["code"] == "body_anchor_low" for issue in case["hard_failures"])
 
 
-def test_validate_case_pair_page_count_warning(monkeypatch, tmp_path: Path) -> None:
+def test_validate_case_pair_page_count_info(monkeypatch, tmp_path: Path) -> None:
     case_dir = _make_case_dir(tmp_path, "1")
     _write_case_pair(case_dir)
     pair = validator.discover_case_pairs(tmp_path)[0]
@@ -334,7 +335,8 @@ def test_validate_case_pair_page_count_warning(monkeypatch, tmp_path: Path) -> N
     result = validator.validate_case_pair(pair, tmp_path / "generated")
 
     assert result.passed is True
-    assert any(issue["code"] == "page_count_warning" for issue in result.warnings)
+    assert result.warnings == []
+    assert any(issue["code"] == "page_count_info" for issue in result.infos)
 
 
 def test_validate_case_pair_page_count_failure(monkeypatch, tmp_path: Path) -> None:
@@ -357,7 +359,7 @@ def test_validate_case_pair_page_count_failure(monkeypatch, tmp_path: Path) -> N
     assert any(issue["code"] == "page_count" for issue in result.hard_failures)
 
 
-def test_validate_case_pair_page_count_delta_two_is_warning(monkeypatch, tmp_path: Path) -> None:
+def test_validate_case_pair_page_count_delta_two_is_info(monkeypatch, tmp_path: Path) -> None:
     case_dir = _make_case_dir(tmp_path, "1")
     _write_case_pair(case_dir)
     pair = validator.discover_case_pairs(tmp_path)[0]
@@ -374,10 +376,11 @@ def test_validate_case_pair_page_count_delta_two_is_warning(monkeypatch, tmp_pat
     result = validator.validate_case_pair(pair, tmp_path / "generated")
 
     assert result.passed is True
-    assert any(issue["code"] == "page_count_warning" for issue in result.warnings)
+    assert result.warnings == []
+    assert any(issue["code"] == "page_count_info" for issue in result.infos)
 
 
-def test_validate_corpus_tracks_warning_case_ids(monkeypatch, tmp_path: Path) -> None:
+def test_validate_corpus_tracks_info_case_ids(monkeypatch, tmp_path: Path) -> None:
     case_dir = _make_case_dir(tmp_path, "7")
     _write_case_pair(case_dir)
 
@@ -397,12 +400,13 @@ def test_validate_corpus_tracks_warning_case_ids(monkeypatch, tmp_path: Path) ->
     )
 
     assert summary["failed_count"] == 0
-    assert summary["warning_case_count"] == 1
-    assert summary["strict_failed_count"] == 1
-    assert summary["issue_case_ids"]["page_count_warning"] == ["7"]
+    assert summary["warning_case_count"] == 0
+    assert summary["info_case_count"] == 1
+    assert summary["strict_failed_count"] == 0
+    assert summary["issue_case_ids"]["page_count_info"] == ["7"]
     markdown = markdown_path.read_text(encoding="utf-8")
-    assert "## Warning Cases" in markdown
-    assert "| page_count_warning | 1 | 7 |" in markdown
+    assert "## Info Cases" in markdown
+    assert "| page_count_info | 1 | 7 |" in markdown
 
 
 def test_main_returns_nonzero_when_fail_on_warnings_requested(monkeypatch, tmp_path: Path) -> None:
@@ -428,7 +432,7 @@ def test_main_returns_nonzero_when_fail_on_warnings_requested(monkeypatch, tmp_p
         ]
     )
 
-    assert exit_code == 2
+    assert exit_code == 0
 
 
 def test_main_returns_zero_when_warnings_are_allowed(monkeypatch, tmp_path: Path) -> None:
@@ -454,6 +458,30 @@ def test_main_returns_zero_when_warnings_are_allowed(monkeypatch, tmp_path: Path
     )
 
     assert exit_code == 0
+
+
+def test_main_returns_nonzero_when_reportlab_warning_is_present(monkeypatch, tmp_path: Path) -> None:
+    case_dir = _make_case_dir(tmp_path, "1")
+    _write_case_pair(case_dir)
+
+    monkeypatch.setattr(validator, "convert_msg_files", lambda paths, output_dir: _fake_conversion(paths, output_dir, pipeline="reportlab"))
+
+    def fake_analyze(pdf_path: Path) -> validator.PdfSnapshot:
+        return _make_snapshot(pdf_path)
+
+    monkeypatch.setattr(validator, "analyze_pdf", fake_analyze)
+
+    exit_code = validator.main(
+        [
+            "--cases-dir",
+            str(tmp_path),
+            "--output-root",
+            str(tmp_path / "reports"),
+            "--fail-on-warnings",
+        ]
+    )
+
+    assert exit_code == 2
 
 
 def test_profile_corpus_remains_flat_only_while_validator_handles_pairs(tmp_path: Path) -> None:

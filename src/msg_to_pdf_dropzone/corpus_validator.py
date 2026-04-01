@@ -87,6 +87,7 @@ class CaseValidationResult:
     passed: bool
     hard_failures: list[dict[str, str]] = field(default_factory=list)
     warnings: list[dict[str, str]] = field(default_factory=list)
+    infos: list[dict[str, str]] = field(default_factory=list)
     header_order_ok: bool = True
     golden_header_order: list[str] = field(default_factory=list)
     generated_header_order: list[str] = field(default_factory=list)
@@ -480,6 +481,7 @@ def compare_snapshots(
 ) -> CaseValidationResult:
     failures: list[ComparisonIssue] = []
     warnings: list[ComparisonIssue] = []
+    infos: list[ComparisonIssue] = []
     conversion_errors = conversion_errors or []
 
     header_order_ok = True
@@ -525,9 +527,9 @@ def compare_snapshots(
             )
         )
     elif page_delta >= 1:
-        warnings.append(
+        infos.append(
             ComparisonIssue(
-                code="page_count_warning",
+                code="page_count_info",
                 message=(
                     f"Page count drift detected: golden={golden.page_count}, generated={generated.page_count}."
                 ),
@@ -551,6 +553,7 @@ def compare_snapshots(
         passed=not failures,
         hard_failures=[_issue_dict(issue) for issue in failures],
         warnings=[_issue_dict(issue) for issue in warnings],
+        infos=[_issue_dict(issue) for issue in infos],
         header_order_ok=header_order_ok,
         golden_header_order=golden.header_order,
         generated_header_order=generated.header_order,
@@ -638,7 +641,7 @@ def validate_case_pair(case_pair: CasePair, generated_root: Path) -> CaseValidat
 def _group_issue_counts(results: list[CaseValidationResult]) -> dict[str, int]:
     counts: dict[str, int] = {}
     for result in results:
-        for issue in result.hard_failures + result.warnings:
+        for issue in result.hard_failures + result.warnings + result.infos:
             counts[issue["code"]] = counts.get(issue["code"], 0) + 1
     return dict(sorted(counts.items(), key=lambda item: (-item[1], item[0])))
 
@@ -646,7 +649,7 @@ def _group_issue_counts(results: list[CaseValidationResult]) -> dict[str, int]:
 def _group_case_ids_by_issue(results: list[CaseValidationResult]) -> dict[str, list[str]]:
     grouped: dict[str, list[str]] = {}
     for result in results:
-        for issue in result.hard_failures + result.warnings:
+        for issue in result.hard_failures + result.warnings + result.infos:
             grouped.setdefault(issue["code"], []).append(result.case_id)
 
     return {
@@ -667,18 +670,19 @@ def _write_markdown_report(summary: dict[str, object], markdown_path: Path) -> N
         f"- Passed: `{summary['passed_count']}`",
         f"- Failed: `{summary['failed_count']}`",
         f"- Cases with warnings: `{summary['warning_case_count']}`",
+        f"- Cases with info: `{summary['info_case_count']}`",
         "",
         "## Case Results",
         "",
-        "| Case | Status | Pipeline | Hard failures | Warnings | Anchor hit ratio |",
-        "| --- | --- | --- | ---: | ---: | ---: |",
+        "| Case | Status | Pipeline | Hard failures | Warnings | Info | Anchor hit ratio |",
+        "| --- | --- | --- | ---: | ---: | ---: | ---: |",
     ]
 
     for case in results:
         status = "PASS" if case["passed"] else "FAIL"
         lines.append(
             f"| {case['case_id']} | {status} | {case['pipeline'] or '-'} | "
-            f"{len(case['hard_failures'])} | {len(case['warnings'])} | "
+            f"{len(case['hard_failures'])} | {len(case['warnings'])} | {len(case['infos'])} | "
             f"{case['body_anchor_hit_ratio']:.2f} |"
         )
 
@@ -710,6 +714,8 @@ def _write_markdown_report(summary: dict[str, object], markdown_path: Path) -> N
                 lines.append(f"- FAIL `{issue['code']}`: {issue['message']}")
             for issue in case["warnings"]:
                 lines.append(f"- WARN `{issue['code']}`: {issue['message']}")
+            for issue in case["infos"]:
+                lines.append(f"- INFO `{issue['code']}`: {issue['message']}")
             lines.append("")
 
     warning_only_cases = [case for case in results if case["passed"] and case["warnings"]]
@@ -722,6 +728,18 @@ def _write_markdown_report(summary: dict[str, object], markdown_path: Path) -> N
             lines.append(f"- Generated PDF: `{case['generated_pdf_path'] or '-'}`")
             for issue in case["warnings"]:
                 lines.append(f"- WARN `{issue['code']}`: {issue['message']}")
+            lines.append("")
+
+    info_only_cases = [case for case in results if case["passed"] and case["infos"]]
+    if info_only_cases:
+        lines.extend(["", "## Info Cases", ""])
+        for case in info_only_cases:
+            lines.append(f"### Case {case['case_id']}")
+            lines.append(f"- Pipeline: `{case['pipeline'] or '-'}`")
+            lines.append(f"- Message: `{Path(case['msg_path']).name}`")
+            lines.append(f"- Generated PDF: `{case['generated_pdf_path'] or '-'}`")
+            for issue in case["infos"]:
+                lines.append(f"- INFO `{issue['code']}`: {issue['message']}")
             lines.append("")
 
     markdown_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
@@ -758,6 +776,7 @@ def validate_corpus(
 
     passed_count = sum(1 for result in results if result.passed)
     warning_case_count = sum(1 for result in results if result.warnings)
+    info_case_count = sum(1 for result in results if result.infos)
     failed_count = len(results) - passed_count
     issue_counts = _group_issue_counts(results)
     issue_case_ids = _group_case_ids_by_issue(results)
@@ -775,6 +794,7 @@ def validate_corpus(
         "passed_count": passed_count,
         "failed_count": failed_count,
         "warning_case_count": warning_case_count,
+        "info_case_count": info_case_count,
         "strict_failed_count": strict_failed_count,
         "avg_anchor_hit_ratio": round(mean(anchor_ratios), 4) if anchor_ratios else 0.0,
         "issue_counts": issue_counts,
