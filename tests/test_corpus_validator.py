@@ -141,6 +141,47 @@ def test_extract_header_and_body_handles_wrapped_recipients() -> None:
     assert body == "Body starts here."
 
 
+def test_extract_header_and_body_handles_spaced_edge_labels() -> None:
+    text = (
+        "F r o m : Wellness Committee <wellness@hanson-inc.com>\n"
+        "S e n t : 2026-03-02 13:55:08 Mountain Standard Time\n"
+        "T o : Everyone Group <everyone@hansonprosvc.onmicrosoft.com>\n"
+        "S u b j e c t : March Wellness Lineup\n"
+        "A t t a c h m e n t s : Daily Journal 1.pdf\n"
+        " Daily Journal 2.pdf\n"
+        "\n"
+        "Newsletter body starts here.\n"
+    )
+
+    headers, order, body = validator._extract_header_and_body(text)
+
+    assert headers["From"] == "Wellness Committee <wellness@hanson-inc.com>"
+    assert headers["Sent"] == "2026-03-02 13:55:08 Mountain Standard Time"
+    assert headers["To"] == "Everyone Group <everyone@hansonprosvc.onmicrosoft.com>"
+    assert headers["Subject"] == "March Wellness Lineup"
+    assert headers["Attachments"] == "Daily Journal 1.pdf Daily Journal 2.pdf"
+    assert order == ["From", "Sent", "To", "Subject", "Attachments"]
+    assert body == "Newsletter body starts here."
+
+
+def test_extract_header_and_body_handles_wrapped_subject_lines() -> None:
+    text = (
+        "From: Jeff Bushur\n"
+        "Sent: Thursday, February 5, 2026 10:04 AM\n"
+        "To: Lane Page; Jason Rowley; Marie Spitler; Derek Betz\n"
+        "Subject: FW: R-43991 - Des 2101166 Stage 3 - SR 127 HMA\n"
+        " Overlay\n"
+        "\n"
+        "Body starts here.\n"
+    )
+
+    headers, order, body = validator._extract_header_and_body(text)
+
+    assert headers["Subject"] == "FW: R-43991 - Des 2101166 Stage 3 - SR 127 HMA Overlay"
+    assert order == ["From", "Sent", "To", "Subject"]
+    assert body == "Body starts here."
+
+
 def test_sent_value_match_tolerates_timezone_wording_and_minute_rounding() -> None:
     expected = "Sunday, March 1, 2026 12:56 PM"
     actual = "2026-03-01 12:55:40 Mountain Standard Time"
@@ -163,6 +204,13 @@ def test_extract_attachment_names_handles_multiline_header() -> None:
         "report-two.xlsx",
         "image001.png",
     ]
+
+
+def test_field_value_match_tolerates_attachment_spacing_drift() -> None:
+    expected = "R- 43991_Preliminary Construction Cost Estimate - ANGOLA - OLD.xlsx"
+    actual = "2025-12-12_2101166_FFC_EstimateBreakdown - HANSON.xlsx; R-43991_Preliminary Construction Cost Estimate - ANGOLA - OLD.xlsx"
+
+    assert validator._field_values_match("Attachments", expected, actual) is True
 
 
 def test_extract_body_anchors_prefers_long_meaningful_lines() -> None:

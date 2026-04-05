@@ -1,4 +1,4 @@
-from .app import main
+from .web_server import main
 
 if __name__ == "__main__":
     main()

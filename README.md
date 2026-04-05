@@ -1,16 +1,14 @@
 # MSG to PDF Dropzone
 
-Windows desktop tool to drag and drop up to 25 Outlook `.msg` files and convert each message into one PDF.
+Windows-local browser app for converting Outlook `.msg` files into clean PDFs with the existing Python conversion engine.
 
 ## What it does
 
-- Accepts dragged `.msg` files (or manual file selection).
-- Supports dragging selected messages directly from Classic Outlook.
-- Converts each email to one PDF.
-- Names each PDF as:
-  - `YYYY-MM-DD_<email subject>.pdf`
-  - `YYYY-MM-DD` is the latest email date found among dropped emails in the same thread.
-- Prompts you to select the save folder before conversion.
+- Runs a local FastAPI server with a browser UI at `http://127.0.0.1:8765`.
+- Accepts dragged `.msg` files, manual browser uploads, or a Classic Outlook selection import.
+- Keeps a local queue, a native output-folder chooser, and a live status log.
+- Drives an embedded mailroom companion from the real task event stream.
+- Converts each email to one PDF named `YYYY-MM-DD_<email subject>.pdf`, using the latest thread date.
 
 ## Requirements
 
@@ -24,14 +22,14 @@ Windows desktop tool to drag and drop up to 25 Outlook `.msg` files and convert 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -e .
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -e .
 ```
 
-## Run
+## Run browser app
 
 ```powershell
-python -m msg_to_pdf_dropzone
+.\.venv\Scripts\python.exe -m msg_to_pdf_dropzone --port 8765
 ```
 
 Or:
@@ -40,31 +38,60 @@ Or:
 msg-to-pdf-dropzone
 ```
 
-The app includes an `Open Theater` / `Close Theater` control in the main window. The theater is a companion workshop scene driven by the same normalized task events the converter emits internally.
+Useful flags:
+
+- `--port 8765` to choose the local port
+- `--host 127.0.0.1` to bind explicitly to localhost
+- `--no-browser` to skip auto-opening the browser tab
+
+The browser UI is the primary app surface. It includes:
+
+- drag/drop `.msg` upload and manual file add
+- Classic Outlook selection import
+- native output-folder chooser
+- conversion queue controls
+- live server-sent task events
+- embedded mailroom companion and preview flow
+
+## Optional legacy desktop entrypoint
+
+The old Tk desktop shell still exists for fallback work, but it is no longer the primary UI:
+
+```powershell
+msg-to-pdf-desktop
+```
 
 ## Run tests
 
 ```powershell
-python -m pip install pytest
-pytest
+.\.venv\Scripts\python.exe -m pytest
 ```
 
-## Profile sample corpus
+## Run the local release gate
 
-Run a local corpus profile against `emails-for-testing` and generate JSON + Markdown summaries:
+Run the repo’s browser-first release validation in one command:
 
 ```powershell
-python -m msg_to_pdf_dropzone.corpus_profiler --runs 3 --emails-dir .\emails-for-testing
+.\scripts\validate-browser-release.ps1
 ```
 
-Reports are written under `.local-corpus-profiles\profile-<timestamp>\`.
+This runs:
 
-## Validate golden corpus
+- `pytest`
+- the real browser API + SSE corpus validation against `.\emails-for-testing`
 
-Validate the paired `.msg` + golden `.pdf` cases under `emails-for-testing` and write a semantic comparison report:
+Useful flags:
+
+- `-KeepArtifacts` to leave `.local-browser-run\` reports on disk
+- `-TimeoutSeconds 1200` to extend the corpus validation budget
+- `-PythonPath .\.venv\Scripts\python.exe` to point at a different local interpreter
+
+## Validate the canonical golden corpus
+
+Validate the paired `.msg` + golden `.pdf` cases under `emails-for-testing`:
 
 ```powershell
-python -m msg_to_pdf_dropzone.corpus_validator --cases-dir .\emails-for-testing
+.\.venv\Scripts\python.exe -m msg_to_pdf_dropzone.corpus_validator --cases-dir .\emails-for-testing
 ```
 
 Or:
@@ -78,11 +105,35 @@ Optional flags:
 - `--case 7` to validate one numbered case folder
 - `--render-strategy fast` to compare fallback rendering behavior
 - `--output-root .\.local-corpus-profiles` to control report location
-- `--fail-on-warnings` to return a non-zero exit code when actionable warnings such as fallback pipeline usage are present
+- `--fail-on-warnings` to return a non-zero exit code when actionable warnings are present
 
-This validator is Windows-oriented and environment-sensitive because conversion still depends on Outlook and Edge. It uses semantic checks rather than exact PDF byte matching, so expected differences like timezone wording, line wrapping, and address formatting are tolerated when the user-visible content still matches.
+## Validate the browser path against the canonical corpus
 
-Page-count drift is tracked as informational output by default, not as a warning, because pagination differences are acceptable when the semantic content still matches. The Markdown report groups issue codes by affected case IDs and includes dedicated warning-only and info-only sections so pagination drift stays visible without cluttering release-gate checks.
+Run the real browser API plus SSE event stream against `emails-for-testing`, then compare the generated PDFs to the golden corpus:
+
+```powershell
+.\.venv\Scripts\python.exe -m msg_to_pdf_dropzone.browser_validation --cases-dir .\emails-for-testing
+```
+
+Or:
+
+```powershell
+msg-to-pdf-browser-validate --cases-dir .\emails-for-testing
+```
+
+By default this starts a temporary local browser server on a free localhost port, writes reports under `.local-browser-run\browser-validation-<timestamp>\`, and exits non-zero if the browser event flow or semantic PDF comparison fails.
+
+The browser validation command starts the server in `fidelity` mode by default, so it exercises the real Outlook-first pipeline unless you explicitly override it with `--render-strategy fast`.
+
+## Profile the local corpus
+
+Run a local corpus profile against `emails-for-testing` and generate JSON + Markdown summaries:
+
+```powershell
+.\.venv\Scripts\python.exe -m msg_to_pdf_dropzone.corpus_profiler --runs 3 --emails-dir .\emails-for-testing
+```
+
+Reports are written under `.local-corpus-profiles\profile-<timestamp>\`.
 
 ## Render strategy (local tuning)
 
@@ -95,9 +146,9 @@ Set strategy for one shell session:
 $env:MSG_TO_PDF_RENDER_STRATEGY='fast'
 ```
 
-## Task event log (sprite theater integration)
+## Task event log
 
-The app can emit normalized task events to a JSONL file for external visualization tools, including the bundled theater companion.
+The app can emit normalized task events to a JSONL file for external debugging tools.
 
 Set the log path for one shell session:
 
@@ -108,17 +159,8 @@ $env:MSG_TO_PDF_TASK_EVENT_LOG='C:\temp\msg-to-pdf-task-events.jsonl'
 Then run the app normally:
 
 ```powershell
-python -m msg_to_pdf_dropzone
+.\.venv\Scripts\python.exe -m msg_to_pdf_dropzone --no-browser
 ```
-
-Or enable the bundled theater directly for that shell session:
-
-```powershell
-$env:MSG_TO_PDF_ENABLE_THEATER='1'
-python -m msg_to_pdf_dropzone
-```
-
-When theater mode is enabled, the app creates a local JSONL event stream automatically and opens the companion viewer on launch. On Windows it prefers an embedded `pywebview` window; if that is unavailable it falls back to the default browser.
 
 Each emitted line is one JSON object describing a stage such as:
 
@@ -135,27 +177,29 @@ Each emitted line is one JSON object describing a stage such as:
 - `complete`
 - `failed`
 
-This is intended for integrations like sprite-based task theater, status visualizers, or local debugging tools.
-
-## Theater runtime development
-
-The bundled theater assets are built from the PixiJS runtime under [`theater_runtime`](./theater_runtime).
-
-Rebuild the packaged theater after editing the runtime:
-
-```powershell
-cd .\theater_runtime
-npm install
-npm test
-npm run build
-```
-
-The build output is written into `src/msg_to_pdf_dropzone/theater_assets` so the Python package can serve it directly.
+This is intended for local debugging, event-stream inspection, and regression analysis.
 
 ## Notes
 
-- Maximum input files per batch is 10.
+- Maximum input files per batch is 25.
 - Filenames are sanitized for Windows.
 - If multiple outputs would have the same name, a numeric suffix is added.
 - Outlook drag handling uses COM to export selected items to temporary `.msg` files when direct file paths are not provided.
 - PDF generation first tries a high-fidelity `.msg` render via Outlook MHTML export + Edge headless print, then an HTML-to-PDF Edge pass, then falls back to the built-in renderer.
+
+## Troubleshooting
+
+- `Port already in use`
+  Run the app on another port, for example `.\.venv\Scripts\python.exe -m msg_to_pdf_dropzone --port 8766`.
+
+- `Browser validation falls back to edge_html more often than expected`
+  This usually means the Outlook MHTML export path is unavailable for those messages on the current machine. Check that Outlook is installed, can open `.msg` files locally, and is not blocked by a first-run or profile prompt.
+
+- `Outlook-first rendering is unavailable`
+  The app can still convert through `edge_html` or `reportlab`, but the highest-fidelity path requires Windows Outlook automation plus Microsoft Edge.
+
+- `Choose Output Folder does nothing`
+  The native folder picker depends on local Windows UI access. Re-run the app from an interactive desktop session, not a headless or service context.
+
+- `Browser validation or app startup fails after changing shells`
+  Use the workspace interpreter directly: `.\.venv\Scripts\python.exe ...`. The local release script also assumes that virtualenv by default.

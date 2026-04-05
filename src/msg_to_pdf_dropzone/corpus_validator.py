@@ -47,7 +47,7 @@ MONTH_LOOKUP = {
     "december": 12,
 }
 HEADER_ORDER_INDEX = {label: index for index, label in enumerate(HEADER_LABELS)}
-HEADER_CONTINUATION_LABELS = {"To", "Cc", "Attachments"}
+HEADER_CONTINUATION_LABELS = {"To", "Cc", "Subject", "Attachments"}
 
 
 @dataclass(slots=True)
@@ -161,6 +161,15 @@ def _normalize_text(value: str) -> str:
     return text.strip()
 
 
+def _collapse_spaced_header_labels(value: str) -> str:
+    collapsed = value
+    for label in HEADER_LABELS:
+        letters = r"\s*".join(re.escape(character) for character in label)
+        pattern = re.compile(rf"\b{letters}\s*:", re.IGNORECASE)
+        collapsed = pattern.sub(f"{label}:", collapsed)
+    return collapsed
+
+
 def _normalize_inline_text(value: str) -> str:
     return re.sub(r"\s+", " ", _normalize_text(value)).strip().lower()
 
@@ -177,7 +186,7 @@ def _tokenize(value: str) -> set[str]:
 
 
 def _extract_header_and_body_inline(extracted_text: str) -> tuple[dict[str, str], list[str], str]:
-    normalized = _normalize_text(extracted_text)
+    normalized = _collapse_spaced_header_labels(_normalize_text(extracted_text))
     candidate_window = normalized[:4000]
     matches = list(INLINE_HEADER_LABEL_PATTERN.finditer(candidate_window))
     if not matches:
@@ -218,7 +227,7 @@ def _extract_header_and_body_inline(extracted_text: str) -> tuple[dict[str, str]
 
 
 def _extract_header_and_body(extracted_text: str) -> tuple[dict[str, str], list[str], str]:
-    normalized = _normalize_text(extracted_text)
+    normalized = _collapse_spaced_header_labels(_normalize_text(extracted_text))
     lines = normalized.splitlines()
     headers: dict[str, str] = {}
     header_order: list[str] = []
@@ -353,6 +362,11 @@ def _field_values_match(label: str, expected: str, actual: str) -> bool:
     actual_normalized = _normalize_inline_text(actual)
     if expected_normalized in actual_normalized:
         return True
+    if label == "Attachments":
+        expected_compact = re.sub(r"\s+", "", expected_normalized)
+        actual_compact = re.sub(r"\s+", "", actual_normalized)
+        if expected_compact and expected_compact in actual_compact:
+            return True
 
     expected_tokens = {token for token in _tokenize(expected) if len(token) >= 3}
     actual_tokens = _tokenize(actual)

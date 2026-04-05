@@ -1,10 +1,30 @@
 from __future__ import annotations
 
+import shutil
 import sys
 from pathlib import Path
+import tempfile
+import time
 
 OL_SAVE_AS_MHTML = 10
 OL_SAVE_AS_HTML = 5
+OUTPUT_WAIT_SECONDS = 2.0
+OUTPUT_POLL_SECONDS = 0.05
+
+
+def _wait_for_output_file(output_web_path: Path, *, timeout_seconds: float = OUTPUT_WAIT_SECONDS) -> bool:
+    deadline = time.perf_counter() + timeout_seconds
+    while time.perf_counter() < deadline:
+        try:
+            if output_web_path.exists() and output_web_path.stat().st_size > 0:
+                return True
+        except OSError:
+            pass
+        time.sleep(OUTPUT_POLL_SECONDS)
+    try:
+        return output_web_path.exists() and output_web_path.stat().st_size > 0
+    except OSError:
+        return False
 
 
 def export_msg_to_web_archive(msg_path: Path, output_web_path: Path) -> int:
@@ -18,24 +38,29 @@ def export_msg_to_web_archive(msg_path: Path, output_web_path: Path) -> int:
     namespace = None
     item = None
     initialized = False
+    result_code = 1
     try:
-        pythoncom.CoInitialize()
-        initialized = True
+        with tempfile.TemporaryDirectory(prefix="msg-to-pdf-outlook-msg-") as temp_dir:
+            staged_msg_path = Path(temp_dir) / msg_path.name
+            shutil.copy2(msg_path, staged_msg_path)
 
-        outlook = win32com.client.DispatchEx("Outlook.Application")
-        namespace = outlook.GetNamespace("MAPI")
-        item = namespace.OpenSharedItem(str(msg_path))
+            pythoncom.CoInitialize()
+            initialized = True
 
-        for save_type in (OL_SAVE_AS_MHTML, OL_SAVE_AS_HTML):
-            try:
-                item.SaveAs(str(output_web_path), save_type)
-                if output_web_path.exists() and output_web_path.stat().st_size > 0:
-                    return 0
-            except Exception:
-                continue
-        return 1
+            outlook = win32com.client.DispatchEx("Outlook.Application")
+            namespace = outlook.GetNamespace("MAPI")
+            item = namespace.OpenSharedItem(str(staged_msg_path))
+
+            for save_type in (OL_SAVE_AS_MHTML, OL_SAVE_AS_HTML):
+                try:
+                    item.SaveAs(str(output_web_path), save_type)
+                    if _wait_for_output_file(output_web_path):
+                        result_code = 0
+                        break
+                except Exception:
+                    continue
     except Exception:
-        return 1
+        result_code = 1
     finally:
         if item is not None:
             try:
@@ -49,6 +74,9 @@ def export_msg_to_web_archive(msg_path: Path, output_web_path: Path) -> int:
                 pythoncom.CoUninitialize()
             except Exception:
                 pass
+    if result_code != 0 and _wait_for_output_file(output_web_path, timeout_seconds=1.0):
+        return 0
+    return result_code
 
 
 def main(argv: list[str]) -> int:

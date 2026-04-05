@@ -9,4 +9,5 @@ build/
 *.egg-info/
 *.log
 .tmp-*.jsonl
+.local-browser-run/
 .local-corpus-profiles/

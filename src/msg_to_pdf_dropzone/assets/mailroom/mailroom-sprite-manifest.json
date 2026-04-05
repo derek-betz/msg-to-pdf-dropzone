@@ -1,0 +1,64 @@
+{
+  "integration": "msg-to-pdf-dropzone",
+  "renderer": "mailroom-companion",
+  "status": "prototype-manual-skin",
+  "notes": [
+    "The packaged runtime currently uses this Cone Guy-inspired prototype skin by default.",
+    "Replace these files with SpriteCook-generated siblings later while keeping the logical asset labels stable.",
+    "Generate the clerk first and treat that asset_id as the future reference_asset_id anchor."
+  ],
+  "assets": {
+    "clerk": "clerk.png",
+    "press": "press.png",
+    "msg": "msg-document.png",
+    "pdf": "pdf-document.png",
+    "failed": "failed-document.png"
+  },
+  "spritecook_plan": [
+    {
+      "label": "mailroom-clerk",
+      "path": "integrations/msg-to-pdf-dropzone/src/msg_to_pdf_dropzone/assets/mailroom/clerk.png",
+      "asset_id": null,
+      "job_id": null,
+      "reference_asset_id": null,
+      "status": "prototype-manual-skin",
+      "prompt": "Tiny professional mailroom clerk sprite, front-facing 3/4 side view for desktop UI companion, same visual family as Cone Guy, orange-and-ink pixel style, smart uniform details, subtle charm, readable silhouette, polished game-like sprite with transparent background."
+    },
+    {
+      "label": "mailroom-press",
+      "path": "integrations/msg-to-pdf-dropzone/src/msg_to_pdf_dropzone/assets/mailroom/press.png",
+      "asset_id": null,
+      "job_id": null,
+      "reference_asset_id": null,
+      "status": "prototype-manual-skin",
+      "prompt": "Compact document conversion press for a digital mailroom, friendly but credible machine, intake slot and output tray, same style as the approved clerk sprite, orange-and-ink pixel art with teal display, transparent background."
+    },
+    {
+      "label": "mailroom-msg-document",
+      "path": "integrations/msg-to-pdf-dropzone/src/msg_to_pdf_dropzone/assets/mailroom/msg-document.png",
+      "asset_id": null,
+      "job_id": null,
+      "reference_asset_id": null,
+      "status": "prototype-manual-skin",
+      "prompt": "Stylized email document prop labeled MSG, small mailroom game asset, same style as the approved clerk sprite, orange-and-ink pixel art, transparent background."
+    },
+    {
+      "label": "mailroom-pdf-document",
+      "path": "integrations/msg-to-pdf-dropzone/src/msg_to_pdf_dropzone/assets/mailroom/pdf-document.png",
+      "asset_id": null,
+      "job_id": null,
+      "reference_asset_id": null,
+      "status": "prototype-manual-skin",
+      "prompt": "Stylized PDF document prop labeled PDF, small mailroom game asset, same style as the approved clerk sprite, orange-and-ink pixel art with cool blue accents, transparent background."
+    },
+    {
+      "label": "mailroom-failed-document",
+      "path": "integrations/msg-to-pdf-dropzone/src/msg_to_pdf_dropzone/assets/mailroom/failed-document.png",
+      "asset_id": null,
+      "job_id": null,
+      "reference_asset_id": null,
+      "status": "prototype-manual-skin",
+      "prompt": "Stylized failed document prop for a digital mailroom, rejected paper with readable failure treatment, same style as the approved clerk sprite, orange-and-ink pixel art with red failure slash, transparent background."
+    }
+  ]
+}
