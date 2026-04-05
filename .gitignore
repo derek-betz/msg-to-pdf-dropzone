@@ -10,4 +10,3 @@ build/
 *.log
 .tmp-*.jsonl
 .local-corpus-profiles/
-emails-for-testing/
