@@ -11,3 +11,4 @@ build/
 .tmp-*.jsonl
 .local-browser-run/
 .local-corpus-profiles/
+.DS_Store

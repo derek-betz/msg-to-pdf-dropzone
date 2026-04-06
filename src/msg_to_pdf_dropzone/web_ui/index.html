@@ -18,51 +18,59 @@
       </header>
 
       <main class="app">
-        <section class="hero">
-          <div class="hero-copy">
-            <div class="hero-copy-header">
-              <div>
-                <p class="section-label">Outlook message conversion</p>
-                <h2>Convert Outlook emails into clean PDFs without giving up the desktop workflow.</h2>
-              </div>
-              <div class="hero-stat">
-                <span>Batch limit</span>
-                <strong id="max-files-label">25 files</strong>
+        <section class="workbench">
+          <section class="workflow-panel">
+            <div class="workflow-copy">
+              <p class="section-label">Simple local workflow</p>
+              <h2>Convert Outlook messages to PDFs.</h2>
+              <p class="hero-body">
+                Drop <code>.msg</code> files, pick a folder, convert. Everything stays local and no AI model inspects message contents.
+              </p>
+              <div class="hero-trust">
+                <span>Local files only</span>
+                <span>No AI inspection</span>
+                <span>Easy for anyone</span>
               </div>
             </div>
-
-            <p class="hero-body">
-              Drag in <code>.msg</code> files or import a Classic Outlook selection. The queue stays local, the conversion runs through
-              the validated PDF pipeline, and the mailroom companion reflects the real event stream.
-            </p>
-
-            <label class="dropzone" id="dropzone" for="file-input">
-              <input id="file-input" type="file" accept=".msg" multiple hidden>
-              <span class="dropzone-label">Drop Outlook <code>.msg</code> files here</span>
-              <span class="dropzone-copy">Classic Outlook drag is supported. Browser upload works too.</span>
-              <span class="dropzone-tip">Use Add Files if drag and drop is not available in your browser session.</span>
-            </label>
 
             <div class="hero-actions">
-              <button class="button button-primary" id="add-files-button" type="button">Add Files</button>
+              <button class="button button-primary" id="add-files-button" type="button">Choose MSG Files</button>
               <button class="button button-secondary" id="import-outlook-button" type="button">Import Outlook Selection</button>
-              <button class="button button-secondary" id="choose-output-button" type="button">Choose Output Folder</button>
+              <button class="button button-secondary" id="choose-output-button" type="button">Choose Save Folder</button>
             </div>
 
-            <div class="folder-strip">
-              <div>
-                <span class="folder-label">Output folder</span>
-                <strong id="output-folder-label">Choose a folder before converting.</strong>
+            <div class="workflow-lower">
+              <label class="dropzone" id="dropzone" for="file-input">
+                <input id="file-input" type="file" accept=".msg" multiple hidden>
+                <span class="dropzone-label">Drop Outlook <code>.msg</code> files here</span>
+                <span class="dropzone-copy">Or use the buttons above.</span>
+              </label>
+
+              <div class="primary-card">
+                <div class="primary-copy">
+                  <p class="section-label">Next step</p>
+                  <h3 id="next-step-title">Add one or more Outlook messages</h3>
+                  <p class="control-copy" id="next-step-copy">
+                    The main button always handles the next step.
+                  </p>
+                </div>
+                <div class="primary-actions">
+                  <button class="button button-primary button-large" id="convert-button" type="button">Convert to PDF</button>
+                  <span class="folder-chip" id="output-folder-chip">Folder not selected</span>
+                </div>
+                <div class="primary-meta">
+                  <div class="meta-pill">
+                    <span class="meta-label">Queue</span>
+                    <strong id="queue-summary">No files queued yet.</strong>
+                  </div>
+                  <div class="meta-pill">
+                    <span class="meta-label">Saving to</span>
+                    <strong id="output-folder-label">Choose a folder.</strong>
+                  </div>
+                </div>
               </div>
-              <span class="folder-chip" id="output-folder-chip">Not selected</span>
             </div>
-
-            <div class="hero-footnotes">
-              <span>Thread-aware naming</span>
-              <span>Validated PDF pipeline</span>
-              <span>Local queue, local files</span>
-            </div>
-          </div>
+          </section>
 
           <aside class="mailroom-panel">
             <div class="mailroom-header">
@@ -74,15 +82,15 @@
             </div>
 
             <p class="mailroom-copy" id="mailroom-summary">
-              Waiting for a batch. Drop files to drive the live sequence, or run the preview to inspect the animation pass.
+              Waiting for files. Drop messages or run the preview to watch the mailroom work.
             </p>
 
             <div class="mailroom-scene" id="mailroom-scene" data-stage="idle" data-pipeline="outlook_edge">
               <div class="scene-glow"></div>
               <div class="scene-track"></div>
               <div class="scene-slot scene-slot-intake">Intake</div>
-              <div class="scene-slot scene-slot-output">Outbox</div>
-              <div class="scene-slot scene-slot-reject">Reject</div>
+              <div class="scene-slot scene-slot-output">Saved PDF</div>
+              <div class="scene-slot scene-slot-reject">Needs attention</div>
               <img class="scene-press" src="/assets/mailroom/press.png" alt="">
               <img class="scene-clerk" id="scene-clerk" src="/assets/mailroom/clerk.png" alt="">
               <img class="scene-doc" id="scene-doc" src="/assets/mailroom/msg-document.png" alt="">
@@ -102,98 +110,57 @@
 
             <div class="timeline" id="timeline">
               <span data-stage="drop_received">Drop</span>
-              <span data-stage="parse_started">Parse</span>
+              <span data-stage="parse_started">Prepare</span>
               <span data-stage="filename_built">Name</span>
-              <span data-stage="pipeline_selected">Press</span>
-              <span data-stage="pdf_written">PDF</span>
-              <span data-stage="complete">Deliver</span>
+              <span data-stage="pipeline_selected">Create PDF</span>
+              <span data-stage="pdf_written">Finish</span>
+              <span data-stage="complete">Save</span>
             </div>
 
             <div class="preview-row">
               <label class="select-wrap">
-                <span>Preview pipeline</span>
+                <span>Preview style</span>
                 <select id="preview-pipeline">
                   <option value="outlook_edge">Outlook Edge</option>
                   <option value="edge_html">Edge HTML</option>
                   <option value="reportlab">ReportLab</option>
                 </select>
               </label>
-              <button class="button button-secondary" id="preview-button" type="button">Preview Flow</button>
+              <button class="button button-secondary" id="preview-button" type="button">Preview Animation</button>
             </div>
           </aside>
         </section>
 
-        <section class="workspace">
+        <section class="bottom-grid">
           <section class="queue-panel">
             <div class="panel-header">
               <div>
                 <p class="section-label">Queued messages</p>
-                <h2>Conversion Queue</h2>
+                <h2>Queue</h2>
               </div>
-              <div class="queue-summary" id="queue-summary">No files queued yet.</div>
+              <button class="button button-secondary" id="clear-button" type="button">Clear Queue</button>
             </div>
 
-            <div class="queue-toolbar">
-              <label class="checkbox-inline">
-                <input id="select-all" type="checkbox">
-                <span>Select all</span>
-              </label>
-              <span id="selection-summary">0 selected</span>
+            <div class="queue-empty" id="queue-empty">
+              Add Outlook messages to start.
             </div>
 
-            <div class="queue-empty" id="queue-empty">No files queued yet. Add Outlook messages to start a batch.</div>
-
-            <div class="queue-table-wrap" id="queue-table-wrap" hidden>
-              <table class="queue-table">
-                <thead>
-                  <tr>
-                    <th></th>
-                    <th>Message</th>
-                    <th>Source</th>
-                    <th>Queued</th>
-                    <th>Size</th>
-                  </tr>
-                </thead>
-                <tbody id="queue-body"></tbody>
-              </table>
-            </div>
+            <div class="queue-list" id="queue-list" hidden></div>
           </section>
 
-          <aside class="control-panel">
-            <section class="control-card">
-              <p class="section-label">Next step</p>
-              <h2>Run the Batch</h2>
-              <p class="control-copy">
-                Convert the selected files, or the full queue when nothing is selected. The browser UI stays connected to live task
-                events while the mailroom updates in place.
-              </p>
-              <div class="control-actions">
-                <button class="button button-primary" id="convert-button" type="button">Convert to PDF</button>
-                <button class="button button-secondary" id="remove-button" type="button">Remove Selected</button>
-                <button class="button button-secondary" id="clear-button" type="button">Clear Queue</button>
+          <section class="status-panel">
+            <div class="panel-header">
+              <div>
+                <p class="section-label">Activity</p>
+                <h2>Activity</h2>
               </div>
-            </section>
-
-            <section class="control-card">
-              <p class="section-label">What you get</p>
-              <ul class="bullet-list">
-                <li>Thread-aware PDF file naming.</li>
-                <li>Validated Outlook/HTML/ReportLab pipeline selection.</li>
-                <li>Accurate stage-level visibility through the mailroom companion.</li>
-              </ul>
-            </section>
-          </aside>
-        </section>
-
-        <section class="status-panel">
-          <div class="panel-header">
-            <div>
-              <p class="section-label">Status</p>
-              <h2>Live Activity</h2>
+              <div class="connection-status">
+                <span class="status-dot" id="connection-dot"></span>
+                <span id="connection-status">Connecting...</span>
+              </div>
             </div>
-            <div class="queue-summary" id="connection-status">Connecting...</div>
-          </div>
-          <div class="status-log" id="status-log" aria-live="polite"></div>
+            <div class="status-log" id="status-log" aria-live="polite"></div>
+          </section>
         </section>
       </main>
     </div>

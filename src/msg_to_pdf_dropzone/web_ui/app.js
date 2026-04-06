@@ -11,7 +11,7 @@ const STAGE_CONFIG = {
   idle: {
     label: "Idle",
     status: "Idle",
-    summary: "Waiting for a batch. Drop files to drive the live sequence, or run the preview to inspect the animation pass.",
+    summary: "Waiting for files. Drop messages or run the preview to watch the mailroom work.",
     clerkX: "6%",
     clerkY: "152px",
     clerkRot: "0deg",
@@ -22,9 +22,9 @@ const STAGE_CONFIG = {
     docAsset: "msg",
   },
   drop_received: {
-    label: "Drop received",
+    label: "File received",
     status: "Intake",
-    summary: "The batch has landed in intake. The clerk acknowledges the message and begins the handoff.",
+    summary: "The message file has entered the local queue and is moving into the mailroom.",
     clerkX: "6%",
     clerkY: "150px",
     clerkRot: "-2deg",
@@ -35,9 +35,9 @@ const STAGE_CONFIG = {
     docAsset: "msg",
   },
   files_accepted: {
-    label: "Files accepted",
-    status: "Accepted",
-    summary: "The queue is locked in. The clerk moves the accepted message toward the work surface.",
+    label: "Queued",
+    status: "Queued",
+    summary: "The file is staged locally and ready for conversion when the batch starts.",
     clerkX: "14%",
     clerkY: "150px",
     clerkRot: "-2deg",
@@ -48,9 +48,9 @@ const STAGE_CONFIG = {
     docAsset: "msg",
   },
   outlook_extract_started: {
-    label: "Outlook import",
+    label: "Importing from Outlook",
     status: "Importing",
-    summary: "A Classic Outlook selection is being extracted into the local batch queue before conversion begins.",
+    summary: "The selected Outlook message is being copied into the local queue before conversion starts.",
     clerkX: "10%",
     clerkY: "150px",
     clerkRot: "-1deg",
@@ -61,9 +61,9 @@ const STAGE_CONFIG = {
     docAsset: "msg",
   },
   output_folder_selected: {
-    label: "Output chosen",
+    label: "Save folder confirmed",
     status: "Ready",
-    summary: "The destination folder is set. The mailroom now knows where the finished PDFs should be delivered.",
+    summary: "The destination folder is set, so the finished PDF now has a place to go.",
     clerkX: "18%",
     clerkY: "148px",
     clerkRot: "0deg",
@@ -74,9 +74,9 @@ const STAGE_CONFIG = {
     docAsset: "msg",
   },
   parse_started: {
-    label: "Parsing message",
-    status: "Parsing",
-    summary: "The message is being read and normalized into email record data before any PDF work starts.",
+    label: "Preparing message",
+    status: "Preparing",
+    summary: "The Outlook message is being prepared for conversion into a clean PDF.",
     clerkX: "22%",
     clerkY: "144px",
     clerkRot: "0deg",
@@ -87,9 +87,9 @@ const STAGE_CONFIG = {
     docAsset: "msg",
   },
   filename_built: {
-    label: "Filename built",
-    status: "Stamped",
-    summary: "Thread-aware naming is complete. The batch now has the target PDF output name for this message.",
+    label: "Building filename",
+    status: "Naming",
+    summary: "The final PDF name is being built from the thread date and message subject.",
     clerkX: "28%",
     clerkY: "146px",
     clerkRot: "0deg",
@@ -100,9 +100,9 @@ const STAGE_CONFIG = {
     docAsset: "msg",
   },
   pdf_pipeline_started: {
-    label: "Press loading",
-    status: "Loading press",
-    summary: "The mailroom feeds the message into the PDF pipeline and prepares the active renderer.",
+    label: "Loading tools",
+    status: "Loading",
+    summary: "The PDF tools are loading for this file before the final creation pass begins.",
     clerkX: "38%",
     clerkY: "148px",
     clerkRot: "1deg",
@@ -113,9 +113,9 @@ const STAGE_CONFIG = {
     docAsset: "msg",
   },
   pipeline_selected: {
-    label: "Pipeline selected",
-    status: "Press running",
-    summary: "The press is running the selected renderer. This is the core conversion pass that turns the message into a PDF.",
+    label: "Creating PDF",
+    status: "Creating",
+    summary: "The selected conversion route is turning the Outlook message into a finished PDF.",
     clerkX: "47%",
     clerkY: "150px",
     clerkRot: "2deg",
@@ -126,9 +126,9 @@ const STAGE_CONFIG = {
     docAsset: "msg",
   },
   pdf_written: {
-    label: "PDF written",
+    label: "PDF created",
     status: "PDF ready",
-    summary: "The press has produced the PDF. The payload switches from MSG to PDF before final delivery.",
+    summary: "The PDF has been created and is about to be placed in the selected folder.",
     clerkX: "58%",
     clerkY: "150px",
     clerkRot: "2deg",
@@ -139,9 +139,9 @@ const STAGE_CONFIG = {
     docAsset: "pdf",
   },
   deliver_started: {
-    label: "Delivering",
-    status: "Delivering",
-    summary: "The converted PDF is being moved into the destination folder selected for this batch.",
+    label: "Saving file",
+    status: "Saving",
+    summary: "The finished PDF is being delivered into the selected folder.",
     clerkX: "67%",
     clerkY: "150px",
     clerkRot: "1deg",
@@ -152,9 +152,9 @@ const STAGE_CONFIG = {
     docAsset: "pdf",
   },
   complete: {
-    label: "Delivered",
+    label: "Saved",
     status: "Complete",
-    summary: "The PDF has been delivered successfully. The mailroom stays green until the next file arrives.",
+    summary: "The PDF has been saved successfully. The mailroom stays ready for the next file.",
     clerkX: "69%",
     clerkY: "152px",
     clerkRot: "0deg",
@@ -165,9 +165,9 @@ const STAGE_CONFIG = {
     docAsset: "pdf",
   },
   failed: {
-    label: "Failed",
-    status: "Rejected",
-    summary: "The file hit a conversion failure and was routed to reject instead of the output slot.",
+    label: "Needs attention",
+    status: "Failed",
+    summary: "This file could not be converted, so it was routed to the reject lane instead of saved output.",
     clerkX: "72%",
     clerkY: "154px",
     clerkRot: "0deg",
@@ -194,22 +194,23 @@ const PIPELINE_LABELS = {
 const state = {
   maxFiles: 25,
   items: [],
-  selected: new Set(),
   outputDir: "",
   outputDirLabel: "",
+  statuses: [],
+  isBusy: false,
   mailroom: {
     stage: "idle",
     fileName: "No batch loaded",
     summary: STAGE_CONFIG.idle.summary,
     pipeline: "outlook_edge",
   },
-  statuses: [],
 };
 
 const elements = {
   addFilesButton: document.getElementById("add-files-button"),
   chooseOutputButton: document.getElementById("choose-output-button"),
   clearButton: document.getElementById("clear-button"),
+  connectionDot: document.getElementById("connection-dot"),
   connectionStatus: document.getElementById("connection-status"),
   convertButton: document.getElementById("convert-button"),
   dropzone: document.getElementById("dropzone"),
@@ -219,22 +220,20 @@ const elements = {
   mailroomScene: document.getElementById("mailroom-scene"),
   mailroomStage: document.getElementById("mailroom-stage"),
   mailroomSummary: document.getElementById("mailroom-summary"),
-  maxFilesLabel: document.getElementById("max-files-label"),
+  nextStepCopy: document.getElementById("next-step-copy"),
+  nextStepTitle: document.getElementById("next-step-title"),
   outputFolderChip: document.getElementById("output-folder-chip"),
   outputFolderLabel: document.getElementById("output-folder-label"),
   pipelinePill: document.getElementById("pipeline-pill"),
   previewButton: document.getElementById("preview-button"),
   previewPipeline: document.getElementById("preview-pipeline"),
-  queueBody: document.getElementById("queue-body"),
   queueCountBadge: document.getElementById("queue-count-badge"),
   queueEmpty: document.getElementById("queue-empty"),
+  queueList: document.getElementById("queue-list"),
   queueSummary: document.getElementById("queue-summary"),
-  queueTableWrap: document.getElementById("queue-table-wrap"),
-  removeButton: document.getElementById("remove-button"),
   sceneDoc: document.getElementById("scene-doc"),
   sceneStatus: document.getElementById("scene-status"),
-  selectAll: document.getElementById("select-all"),
-  selectionSummary: document.getElementById("selection-summary"),
+  shell: document.querySelector(".shell"),
   statusLog: document.getElementById("status-log"),
   timeline: document.getElementById("timeline"),
 };
@@ -291,6 +290,21 @@ function formatSource(source) {
   return source || "Local";
 }
 
+function setConnectionState(mode) {
+  elements.connectionDot.classList.remove("is-live", "is-offline");
+  if (mode === "live") {
+    elements.connectionDot.classList.add("is-live");
+    elements.connectionStatus.textContent = "Live";
+    return;
+  }
+  if (mode === "offline") {
+    elements.connectionDot.classList.add("is-offline");
+    elements.connectionStatus.textContent = "Reconnecting...";
+    return;
+  }
+  elements.connectionStatus.textContent = "Connecting...";
+}
+
 function addStatus(message, { tone = "info", meta = "" } = {}) {
   state.statuses.unshift({
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -298,13 +312,18 @@ function addStatus(message, { tone = "info", meta = "" } = {}) {
     meta,
     tone,
   });
-  state.statuses = state.statuses.slice(0, 10);
+  state.statuses = state.statuses.slice(0, 8);
   renderStatusLog();
 }
 
 function renderStatusLog() {
   if (!state.statuses.length) {
-    elements.statusLog.innerHTML = '<div class="status-line"><strong>Browser UI ready.</strong><span class="status-line-meta">Waiting for queue activity.</span></div>';
+    elements.statusLog.innerHTML = `
+      <div class="status-line">
+        <strong>Ready for files.</strong>
+        <span class="status-line-meta">Drop messages or import from Classic Outlook.</span>
+      </div>
+    `;
     return;
   }
 
@@ -322,51 +341,87 @@ function renderStatusLog() {
     .join("");
 }
 
-function activeIds() {
-  return state.selected.size ? [...state.selected] : state.items.map((item) => item.id);
+function setBusy(isBusy) {
+  state.isBusy = isBusy;
+  elements.shell.dataset.busy = isBusy ? "true" : "false";
+  updateActionState();
 }
 
 function setOutputFolder(outputDir, outputDirLabel) {
   state.outputDir = outputDir || "";
   state.outputDirLabel = outputDirLabel || "";
-  elements.outputFolderLabel.textContent = state.outputDir || "Choose a folder before converting.";
-  elements.outputFolderChip.textContent = state.outputDir ? state.outputDirLabel || "Selected" : "Not selected";
-  updateButtonState();
+  elements.outputFolderLabel.textContent = state.outputDir || "Choose a folder.";
+  elements.outputFolderChip.textContent = state.outputDir ? state.outputDirLabel || "Folder selected" : "Folder not selected";
+  elements.chooseOutputButton.textContent = state.outputDir ? "Change Save Folder" : "Choose Save Folder";
+  updateActionState();
 }
 
-function updateButtonState() {
-  const hasItems = state.items.length > 0;
-  elements.removeButton.disabled = state.selected.size === 0;
-  elements.clearButton.disabled = !hasItems;
-  elements.convertButton.disabled = !hasItems || !state.outputDir;
-  elements.selectAll.disabled = !hasItems;
+function updateActionState() {
+  const queuedCount = state.items.length;
+  const hasItems = queuedCount > 0;
+  const busy = state.isBusy;
+
+  elements.addFilesButton.disabled = busy;
+  elements.importOutlookButton.disabled = busy;
+  elements.chooseOutputButton.disabled = busy;
+  elements.previewButton.disabled = busy;
+  elements.clearButton.disabled = busy || !hasItems;
+  elements.convertButton.disabled = busy || !hasItems;
+
+  if (!hasItems) {
+    elements.nextStepTitle.textContent = "Add one or more Outlook messages";
+    elements.nextStepCopy.textContent = "Drop files here or import from Classic Outlook.";
+    elements.convertButton.textContent = "Convert to PDF";
+    return;
+  }
+
+  if (!state.outputDir) {
+    elements.nextStepTitle.textContent = "Choose where the PDFs should be saved";
+    elements.nextStepCopy.textContent = "The main button opens the folder picker.";
+    elements.convertButton.textContent = "Choose Folder to Continue";
+    return;
+  }
+
+  elements.nextStepTitle.textContent = "Convert the queued batch";
+  elements.nextStepCopy.textContent = "The files are ready to convert and save.";
+  elements.convertButton.textContent = `Convert ${queuedCount} File${queuedCount === 1 ? "" : "s"} to PDF`;
 }
 
 function renderQueue() {
   const queuedCount = state.items.length;
-  const selectedCount = state.selected.size;
   elements.queueCountBadge.textContent = `${queuedCount} queued`;
-  elements.queueSummary.textContent = queuedCount ? `${queuedCount} file${queuedCount === 1 ? "" : "s"} staged locally.` : "No files queued yet.";
-  elements.selectionSummary.textContent = `${selectedCount} selected`;
-  elements.selectAll.checked = queuedCount > 0 && selectedCount === queuedCount;
-  elements.queueEmpty.hidden = queuedCount > 0;
-  elements.queueTableWrap.hidden = queuedCount === 0;
+  elements.queueSummary.textContent = queuedCount
+    ? `${queuedCount} file${queuedCount === 1 ? "" : "s"} ready for conversion.`
+    : "No files queued yet.";
 
-  elements.queueBody.innerHTML = state.items
-    .map((item) => {
-      const isSelected = state.selected.has(item.id);
-      return `
-        <tr class="${isSelected ? "is-selected" : ""}">
-          <td><input class="row-check" data-id="${escapeHtml(item.id)}" type="checkbox" ${isSelected ? "checked" : ""}></td>
-          <td><div class="queue-name">${escapeHtml(item.name)}</div></td>
-          <td><span class="source-pill">${escapeHtml(formatSource(item.source))}</span></td>
-          <td>${escapeHtml(formatTimestamp(item.createdAt))}</td>
-          <td>${escapeHtml(formatBytes(item.sizeBytes))}</td>
-        </tr>
-      `;
-    })
+  elements.queueEmpty.hidden = queuedCount > 0;
+  elements.queueList.hidden = queuedCount === 0;
+
+  if (!queuedCount) {
+    elements.queueList.innerHTML = "";
+    updateActionState();
+    return;
+  }
+
+  elements.queueList.innerHTML = state.items
+    .map(
+      (item) => `
+        <div class="queue-item">
+          <div class="queue-main">
+            <div class="queue-name">${escapeHtml(item.name)}</div>
+            <div class="queue-meta">
+              <span class="source-pill">${escapeHtml(formatSource(item.source))}</span>
+              <span>${escapeHtml(formatBytes(item.sizeBytes))}</span>
+              <span>Queued ${escapeHtml(formatTimestamp(item.createdAt))}</span>
+            </div>
+          </div>
+          <button class="remove-pill" data-remove-id="${escapeHtml(item.id)}" type="button">Remove</button>
+        </div>
+      `,
+    )
     .join("");
-  updateButtonState();
+
+  updateActionState();
 }
 
 function timelineKeyForStage(stage) {
@@ -432,28 +487,42 @@ function renderMailroom() {
   elements.mailroomFile.textContent = state.mailroom.fileName || "No batch loaded";
   elements.mailroomStage.textContent = config.label;
   elements.mailroomSummary.textContent = state.mailroom.summary || config.summary;
-  elements.pipelinePill.textContent = stage === "idle" ? "Idle" : `${pipelineLabel(state.mailroom.pipeline)} pipeline`;
+  elements.pipelinePill.textContent = stage === "idle" ? "Idle" : `${pipelineLabel(state.mailroom.pipeline)} route`;
   renderTimeline(stage);
 }
 
-function applyQueueSnapshot(items, { preserveSelection = true } = {}) {
+function applyQueueSnapshot(items) {
   state.items = items || [];
-  const validIds = new Set(state.items.map((item) => item.id));
-  state.selected = preserveSelection ? new Set([...state.selected].filter((id) => validIds.has(id))) : new Set();
   renderQueue();
 }
 
 function describeEvent(event) {
   const stageLabel = (STAGE_CONFIG[event.stage] || STAGE_CONFIG.idle).label;
   const fileName = event.fileName || "Current batch";
-  const pipeline = event.pipeline ? ` via ${pipelineLabel(event.pipeline)}` : "";
+  const pipeline = event.pipeline ? `${pipelineLabel(event.pipeline)} route` : "";
+  const meta = event.timestamp ? `Event at ${formatTimestamp(event.timestamp)}` : "Live activity";
+
   if (event.stage === "failed") {
-    return { message: `${fileName} failed during ${stageLabel.toLowerCase()}.`, tone: "error", meta: event.error || "Conversion error" };
+    return {
+      message: `${fileName} needs attention.`,
+      tone: "error",
+      meta: event.error || "The file could not be converted.",
+    };
   }
+
   if (event.stage === "complete") {
-    return { message: `${fileName} delivered successfully${pipeline}.`, tone: "success", meta: stageLabel };
+    return {
+      message: `${fileName} saved successfully.`,
+      tone: "success",
+      meta: pipeline || "PDF saved",
+    };
   }
-  return { message: `${fileName}: ${stageLabel}${pipeline}.`, tone: "preview", meta: event.timestamp ? `Event at ${formatTimestamp(event.timestamp)}` : "Live event" };
+
+  return {
+    message: `${fileName}: ${stageLabel}.`,
+    tone: "preview",
+    meta: pipeline || meta,
+  };
 }
 
 function handleBrokerMessage(payload) {
@@ -461,7 +530,9 @@ function handleBrokerMessage(payload) {
     state.mailroom.stage = payload.stage;
     state.mailroom.fileName = payload.fileName || state.mailroom.fileName;
     state.mailroom.pipeline = payload.pipeline || state.mailroom.pipeline;
-    state.mailroom.summary = payload.error ? `${(STAGE_CONFIG[payload.stage] || STAGE_CONFIG.idle).summary} ${payload.error}` : (STAGE_CONFIG[payload.stage] || STAGE_CONFIG.idle).summary;
+    state.mailroom.summary = payload.error
+      ? `${(STAGE_CONFIG[payload.stage] || STAGE_CONFIG.idle).summary} ${payload.error}`
+      : (STAGE_CONFIG[payload.stage] || STAGE_CONFIG.idle).summary;
     renderMailroom();
     const description = describeEvent(payload);
     addStatus(description.message, { tone: description.tone, meta: description.meta });
@@ -486,13 +557,11 @@ async function api(path, options = {}) {
 async function loadHealth() {
   const payload = await api("/api/health");
   state.maxFiles = payload.maxFiles || state.maxFiles;
-  elements.maxFilesLabel.textContent = `${state.maxFiles} files`;
 }
 
 async function loadQueue() {
   const payload = await api("/api/queue");
   state.maxFiles = payload.maxFiles || state.maxFiles;
-  elements.maxFilesLabel.textContent = `${state.maxFiles} files`;
   applyQueueSnapshot(payload.items || []);
 }
 
@@ -505,12 +574,13 @@ async function uploadFiles(files) {
   const payload = await api("/api/upload", { method: "POST", body: formData });
   applyQueueSnapshot(payload.items || []);
   if (payload.accepted?.length) {
-    state.selected = new Set(payload.accepted.map((item) => item.id));
-    renderQueue();
-    addStatus(`Queued ${payload.accepted.length} file(s).`, { tone: "success", meta: "Browser upload" });
+    addStatus(`Queued ${payload.accepted.length} file(s).`, { tone: "success", meta: "Files added to the local queue" });
   }
   if (payload.rejectedCount) {
-    addStatus(`${payload.rejectedCount} file(s) were skipped.`, { tone: "error", meta: "Only .msg files are accepted and the queue is capped." });
+    addStatus(`${payload.rejectedCount} file(s) were skipped.`, {
+      tone: "error",
+      meta: `Only .msg files are accepted and the queue limit is ${state.maxFiles}.`,
+    });
   }
 }
 
@@ -518,34 +588,43 @@ async function importOutlookSelection() {
   const payload = await api("/api/import-outlook", { method: "POST" });
   applyQueueSnapshot(payload.items || []);
   if (payload.accepted?.length) {
-    state.selected = new Set(payload.accepted.map((item) => item.id));
-    renderQueue();
     addStatus(`Imported ${payload.accepted.length} Outlook message(s).`, { tone: "success", meta: "Classic Outlook selection" });
     return;
   }
-  addStatus("No Outlook messages were imported.", { tone: "error", meta: "Make sure a Classic Outlook selection is available." });
+  addStatus("No Outlook messages were imported.", {
+    tone: "error",
+    meta: "Make sure a Classic Outlook selection is available.",
+  });
 }
 
-async function chooseOutputFolder() {
+async function chooseOutputFolder({ silentCancel = false } = {}) {
   const payload = await api("/api/choose-output-folder", { method: "POST" });
   if (!payload.outputDir) {
-    addStatus("Output folder selection was cancelled.", { tone: "info", meta: "Folder chooser" });
-    return;
+    if (!silentCancel) {
+      addStatus("Save folder selection was cancelled.", { tone: "info", meta: "Folder chooser" });
+    }
+    return false;
   }
   setOutputFolder(payload.outputDir, payload.outputDirLabel);
-  addStatus("Output folder selected.", { tone: "success", meta: payload.outputDir });
+  addStatus("Save folder selected.", { tone: "success", meta: payload.outputDir });
+  return true;
 }
 
-async function convertSelection() {
+async function convertQueue() {
+  if (!state.items.length) {
+    addStatus("Add Outlook messages before converting.", { tone: "error", meta: "Queue is empty" });
+    return;
+  }
+
   if (!state.outputDir) {
-    addStatus("Choose an output folder before converting.", { tone: "error", meta: "Conversion blocked" });
-    return;
+    const selected = await chooseOutputFolder({ silentCancel: true });
+    if (!selected) {
+      addStatus("Choose a save folder to continue.", { tone: "error", meta: "Conversion paused" });
+      return;
+    }
   }
-  const ids = activeIds();
-  if (!ids.length) {
-    addStatus("Queue is empty.", { tone: "error", meta: "Nothing to convert" });
-    return;
-  }
+
+  const ids = state.items.map((item) => item.id);
   addStatus(`Starting conversion for ${ids.length} file(s).`, { tone: "preview", meta: state.outputDir });
   const payload = await api("/api/convert", {
     method: "POST",
@@ -554,31 +633,26 @@ async function convertSelection() {
   });
   await loadQueue();
   if (payload.convertedFiles?.length) {
-    addStatus(`Converted ${payload.convertedFiles.length} file(s).`, { tone: "success", meta: payload.convertedFiles.join(" | ") });
+    addStatus(`Converted ${payload.convertedFiles.length} file(s).`, { tone: "success", meta: "PDF batch complete" });
   }
   if (payload.errors?.length) {
     payload.errors.forEach((error) => addStatus(error, { tone: "error", meta: "Conversion error" }));
   }
 }
 
-async function removeSelection() {
-  if (!state.selected.size) {
-    return;
-  }
+async function removeItem(id) {
   const payload = await api("/api/remove", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ids: [...state.selected] }),
+    body: JSON.stringify({ ids: [id] }),
   });
-  state.selected.clear();
-  applyQueueSnapshot(payload.items || [], { preserveSelection: false });
-  addStatus("Removed the selected files from the queue.", { tone: "info", meta: "Queue updated" });
+  applyQueueSnapshot(payload.items || []);
+  addStatus("Removed a file from the queue.", { tone: "info", meta: "Queue updated" });
 }
 
 async function clearQueue() {
   await api("/api/clear", { method: "POST" });
-  state.selected.clear();
-  applyQueueSnapshot([], { preserveSelection: false });
+  applyQueueSnapshot([]);
   addStatus("Cleared the queue.", { tone: "info", meta: "Queue updated" });
 }
 
@@ -592,23 +666,33 @@ async function previewMailroom() {
   addStatus("Running the mailroom preview.", { tone: "preview", meta: pipelineLabel(pipeline) });
 }
 
+async function runBusy(task) {
+  if (state.isBusy) {
+    return;
+  }
+  setBusy(true);
+  try {
+    await task();
+  } finally {
+    setBusy(false);
+  }
+}
+
 function installQueueEvents() {
-  elements.queueBody.addEventListener("change", (event) => {
+  elements.queueList.addEventListener("click", async (event) => {
     const target = event.target;
-    if (!(target instanceof HTMLInputElement) || !target.classList.contains("row-check")) {
+    if (!(target instanceof HTMLElement)) {
       return;
     }
-    if (target.checked) {
-      state.selected.add(target.dataset.id || "");
-    } else {
-      state.selected.delete(target.dataset.id || "");
+    const button = target.closest("[data-remove-id]");
+    if (!button) {
+      return;
     }
-    renderQueue();
-  });
-
-  elements.selectAll.addEventListener("change", () => {
-    state.selected = elements.selectAll.checked ? new Set(state.items.map((item) => item.id)) : new Set();
-    renderQueue();
+    try {
+      await runBusy(() => removeItem(button.dataset.removeId || ""));
+    } catch (error) {
+      addStatus(error.message, { tone: "error", meta: "Remove failed" });
+    }
   });
 }
 
@@ -634,7 +718,7 @@ function installDropzoneEvents() {
 
   elements.dropzone.addEventListener("drop", async (event) => {
     try {
-      await uploadFiles(event.dataTransfer?.files);
+      await runBusy(() => uploadFiles(event.dataTransfer?.files));
     } catch (error) {
       addStatus(error.message, { tone: "error", meta: "Upload failed" });
     }
@@ -643,19 +727,23 @@ function installDropzoneEvents() {
 
 function connectEvents() {
   const eventSource = new EventSource("/api/events");
+  setConnectionState("connecting");
+
   eventSource.onopen = () => {
-    elements.connectionStatus.textContent = "Live";
+    setConnectionState("live");
   };
+
   eventSource.onerror = () => {
-    elements.connectionStatus.textContent = "Reconnecting...";
+    setConnectionState("offline");
   };
+
   eventSource.onmessage = (event) => {
     if (!event.data) {
       return;
     }
     try {
       handleBrokerMessage(JSON.parse(event.data));
-      elements.connectionStatus.textContent = "Live";
+      setConnectionState("live");
     } catch (error) {
       addStatus(error.message, { tone: "error", meta: "Event parsing failed" });
     }
@@ -664,52 +752,51 @@ function connectEvents() {
 
 function installActionEvents() {
   elements.addFilesButton.addEventListener("click", () => elements.fileInput.click());
+
   elements.fileInput.addEventListener("change", async () => {
     try {
-      await uploadFiles(elements.fileInput.files);
+      await runBusy(() => uploadFiles(elements.fileInput.files));
       elements.fileInput.value = "";
     } catch (error) {
       addStatus(error.message, { tone: "error", meta: "Upload failed" });
     }
   });
+
   elements.importOutlookButton.addEventListener("click", async () => {
     try {
-      await importOutlookSelection();
+      await runBusy(importOutlookSelection);
     } catch (error) {
       addStatus(error.message, { tone: "error", meta: "Outlook import failed" });
     }
   });
+
   elements.chooseOutputButton.addEventListener("click", async () => {
     try {
-      await chooseOutputFolder();
+      await runBusy(() => chooseOutputFolder());
     } catch (error) {
       addStatus(error.message, { tone: "error", meta: "Folder chooser failed" });
     }
   });
+
   elements.convertButton.addEventListener("click", async () => {
     try {
-      await convertSelection();
+      await runBusy(convertQueue);
     } catch (error) {
       addStatus(error.message, { tone: "error", meta: "Conversion failed" });
     }
   });
-  elements.removeButton.addEventListener("click", async () => {
-    try {
-      await removeSelection();
-    } catch (error) {
-      addStatus(error.message, { tone: "error", meta: "Remove failed" });
-    }
-  });
+
   elements.clearButton.addEventListener("click", async () => {
     try {
-      await clearQueue();
+      await runBusy(clearQueue);
     } catch (error) {
       addStatus(error.message, { tone: "error", meta: "Clear failed" });
     }
   });
+
   elements.previewButton.addEventListener("click", async () => {
     try {
-      await previewMailroom();
+      await runBusy(previewMailroom);
     } catch (error) {
       addStatus(error.message, { tone: "error", meta: "Preview failed" });
     }
@@ -719,6 +806,7 @@ function installActionEvents() {
 async function bootstrap() {
   renderMailroom();
   renderStatusLog();
+  renderQueue();
   installQueueEvents();
   installDropzoneEvents();
   installActionEvents();
@@ -726,7 +814,7 @@ async function bootstrap() {
   await loadHealth();
   await loadQueue();
   setOutputFolder("", "");
-  addStatus("Browser workspace ready.", { tone: "info", meta: "Queue, preview, and live event bridge are online." });
+  addStatus("Browser workspace ready.", { tone: "info", meta: "Files stay local and the mailroom companion is online." });
 }
 
 bootstrap().catch((error) => {
