@@ -63,9 +63,9 @@ def _empty_image_metrics() -> dict[str, int]:
 
 def _get_render_strategy() -> str:
     raw_value = os.environ.get("MSG_TO_PDF_RENDER_STRATEGY", "").strip().lower()
-    if raw_value == RENDER_STRATEGY_FAST:
-        return RENDER_STRATEGY_FAST
-    return RENDER_STRATEGY_FIDELITY
+    if raw_value == RENDER_STRATEGY_FIDELITY:
+        return RENDER_STRATEGY_FIDELITY
+    return RENDER_STRATEGY_FAST
 
 
 def _allow_remote_images() -> bool:
@@ -476,6 +476,7 @@ def _print_web_document_via_edge(input_path: Path, output_path: Path) -> bool:
         "--headless",
         "--disable-gpu",
         "--no-pdf-header-footer",
+        "--print-to-pdf-no-header",
         "--run-all-compositor-stages-before-draw",
         "--virtual-time-budget=10000",
         f"--print-to-pdf={output_path}",

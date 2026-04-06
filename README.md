@@ -137,13 +137,13 @@ Reports are written under `.local-corpus-profiles\profile-<timestamp>\`.
 
 ## Render strategy (local tuning)
 
-- Default (`fidelity`): Outlook MHTML + Edge first, then HTML + Edge, then ReportLab.
-- Optional (`fast`): skips Outlook render stage for faster comparisons.
+- Default (`fast`): HTML + Edge first, then ReportLab. This avoids Outlook-export artifacts that some messages produce.
+- Optional (`fidelity`): Outlook MHTML + Edge first, then HTML + Edge, then ReportLab.
 
 Set strategy for one shell session:
 
 ```powershell
-$env:MSG_TO_PDF_RENDER_STRATEGY='fast'
+$env:MSG_TO_PDF_RENDER_STRATEGY='fidelity'
 ```
 
 ## Task event log
@@ -185,7 +185,7 @@ This is intended for local debugging, event-stream inspection, and regression an
 - Filenames are sanitized for Windows.
 - If multiple outputs would have the same name, a numeric suffix is added.
 - Outlook drag handling uses COM to export selected items to temporary `.msg` files when direct file paths are not provided.
-- PDF generation first tries a high-fidelity `.msg` render via Outlook MHTML export + Edge headless print, then an HTML-to-PDF Edge pass, then falls back to the built-in renderer.
+- PDF generation now defaults to the HTML-to-PDF Edge path, then falls back to the built-in renderer. Set `MSG_TO_PDF_RENDER_STRATEGY=fidelity` to opt into the Outlook MHTML + Edge path first.
 
 ## Troubleshooting
 
@@ -196,7 +196,7 @@ This is intended for local debugging, event-stream inspection, and regression an
   This usually means the Outlook MHTML export path is unavailable for those messages on the current machine. Check that Outlook is installed, can open `.msg` files locally, and is not blocked by a first-run or profile prompt.
 
 - `Outlook-first rendering is unavailable`
-  The app can still convert through `edge_html` or `reportlab`, but the highest-fidelity path requires Windows Outlook automation plus Microsoft Edge.
+  The app defaults to `edge_html` already. If you explicitly set `MSG_TO_PDF_RENDER_STRATEGY=fidelity`, the Outlook-first path requires Windows Outlook automation plus Microsoft Edge.
 
 - `Choose Output Folder does nothing`
   The native folder picker depends on local Windows UI access. Re-run the app from an interactive desktop session, not a headless or service context.

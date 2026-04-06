@@ -62,7 +62,7 @@ def test_build_email_html_document_prefers_html_body_fragment() -> None:
     assert from_index < sent_index < to_index < cc_index < subject_index < attachments_index
 
 
-def test_write_email_pdf_prefers_outlook_edge_pipeline(monkeypatch, tmp_path: Path) -> None:
+def test_write_email_pdf_prefers_outlook_edge_pipeline_in_fidelity_mode(monkeypatch, tmp_path: Path) -> None:
     record = EmailRecord(
         source_path=tmp_path / "sample.msg",
         subject="Sample Subject",
@@ -76,6 +76,7 @@ def test_write_email_pdf_prefers_outlook_edge_pipeline(monkeypatch, tmp_path: Pa
         thread_key=normalize_thread_subject("Sample Subject"),
     )
     record.source_path.write_text("dummy", encoding="utf-8")
+    monkeypatch.setenv("MSG_TO_PDF_RENDER_STRATEGY", "fidelity")
 
     def fake_office_pipeline(_: Path, output_path: Path) -> bool:
         output_path.write_bytes(b"%PDF-1.4\nfake\n")
@@ -95,6 +96,43 @@ def test_write_email_pdf_prefers_outlook_edge_pipeline(monkeypatch, tmp_path: Pa
     assert output_file.stat().st_size > 0
 
 
+def test_write_email_pdf_defaults_to_edge_html_pipeline(monkeypatch, tmp_path: Path) -> None:
+    record = EmailRecord(
+        source_path=tmp_path / "sample.msg",
+        subject="Default Strategy Subject",
+        sent_at=datetime(2026, 2, 20, 12, 0, tzinfo=timezone.utc),
+        sender="sender@example.com",
+        to="to@example.com",
+        cc="",
+        body="Body text",
+        html_body="<html><body><p>Default route body</p></body></html>",
+        attachment_names=[],
+        thread_key=normalize_thread_subject("Default Strategy Subject"),
+    )
+    record.source_path.write_text("dummy", encoding="utf-8")
+    monkeypatch.delenv("MSG_TO_PDF_RENDER_STRATEGY", raising=False)
+    monkeypatch.setattr(
+        pdf_writer,
+        "_try_write_pdf_via_outlook_and_edge",
+        lambda _msg, _out: (_ for _ in ()).throw(AssertionError("Outlook stage should be skipped by default.")),
+    )
+
+    def fake_edge_html(_html_document: str, output_path: Path) -> bool:
+        output_path.write_bytes(b"%PDF-1.4\ndefault-fast\n")
+        return True
+
+    monkeypatch.setattr(pdf_writer, "_try_write_pdf_via_edge_html", fake_edge_html)
+
+    diagnostics = PdfWriteDiagnostics()
+    output_file = tmp_path / "default-fast.pdf"
+    write_email_pdf(record, output_file, diagnostics=diagnostics)
+
+    assert output_file.exists()
+    assert diagnostics.pipeline == "edge_html"
+    assert diagnostics.stage_seconds["render_strategy_fast"] == 1.0
+    assert diagnostics.stage_seconds["outlook_edge"] == 0.0
+
+
 def test_write_email_pdf_collects_stage_diagnostics(monkeypatch, tmp_path: Path) -> None:
     record = EmailRecord(
         source_path=tmp_path / "sample.msg",
@@ -109,6 +147,7 @@ def test_write_email_pdf_collects_stage_diagnostics(monkeypatch, tmp_path: Path)
         thread_key=normalize_thread_subject("Diagnostics Subject"),
     )
     record.source_path.write_text("dummy", encoding="utf-8")
+    monkeypatch.setenv("MSG_TO_PDF_RENDER_STRATEGY", "fidelity")
 
     monkeypatch.setattr(pdf_writer, "_try_write_pdf_via_outlook_and_edge", lambda _msg, _out: False)
     monkeypatch.setattr(pdf_writer, "_try_write_pdf_via_edge_html", lambda _html, _out: False)
@@ -183,6 +222,7 @@ def test_write_email_pdf_emits_pipeline_selection_events(monkeypatch, tmp_path: 
         thread_key=normalize_thread_subject("Pipeline Events"),
     )
     record.source_path.write_text("dummy", encoding="utf-8")
+    monkeypatch.setenv("MSG_TO_PDF_RENDER_STRATEGY", "fidelity")
 
     monkeypatch.setattr(pdf_writer, "_try_write_pdf_via_outlook_and_edge", lambda _msg, _out: False)
     monkeypatch.setattr(pdf_writer, "_try_write_pdf_via_edge_html", lambda _html, _out: False)
@@ -406,4 +446,5 @@ def test_print_web_document_via_edge_disables_pdf_headers_and_footers(
     command = captured["command"]
     assert isinstance(command, list)
     assert "--no-pdf-header-footer" in command
+    assert "--print-to-pdf-no-header" in command
     assert any(part.startswith("--print-to-pdf=") for part in command)

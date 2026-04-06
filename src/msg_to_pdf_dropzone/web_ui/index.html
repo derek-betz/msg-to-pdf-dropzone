@@ -5,137 +5,44 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>MSG to PDF Dropzone</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect width='48' height='48' rx='12' fill='%231f446d'/%3E%3Cpath d='M16 34L22 13h6l4 12 4-8h5l-7 17h-6l-3-9-3 9z' fill='%23f5efe0'/%3E%3C/svg%3E">
-    <link rel="stylesheet" href="/static/app.css">
+    <link rel="stylesheet" href="/static/app.css?v=queue-progress-bars-6">
   </head>
   <body>
     <div class="shell">
       <header class="topbar">
         <div>
-          <p class="eyebrow">Local browser build</p>
+          <p class="eyebrow">Local conversion workstation</p>
           <h1>MSG to PDF Dropzone</h1>
         </div>
         <div class="topbar-badge" id="queue-count-badge">0 queued</div>
       </header>
 
       <main class="app">
-        <section class="workbench">
+        <section class="main-column">
           <section class="workflow-panel">
-            <div class="workflow-copy">
-              <p class="section-label">Simple local workflow</p>
-              <h2>Convert Outlook messages to PDFs.</h2>
-              <p class="hero-body">
-                Drop <code>.msg</code> files, pick a folder, convert. Everything stays local and no AI model inspects message contents.
-              </p>
-              <div class="hero-trust">
-                <span>Local files only</span>
-                <span>No AI inspection</span>
-                <span>Easy for anyone</span>
+            <div class="workflow-header">
+              <div class="workflow-copy">
+                <p class="section-label">Intake</p>
+                <h2>Drop emails or <code>.msg</code> files.</h2>
+                <p class="hero-body">
+                  Drag from classic Outlook, new Outlook, Outlook on the web, or File Explorer. Everything stays local.
+                </p>
               </div>
+
+              <button class="button button-primary button-large workflow-button" id="convert-button" type="button">Convert to PDF</button>
             </div>
 
-            <div class="hero-actions">
-              <button class="button button-primary" id="add-files-button" type="button">Choose MSG Files</button>
-              <button class="button button-secondary" id="import-outlook-button" type="button">Import Outlook Selection</button>
-              <button class="button button-secondary" id="choose-output-button" type="button">Choose Save Folder</button>
-            </div>
-
-            <div class="workflow-lower">
-              <label class="dropzone" id="dropzone" for="file-input">
-                <input id="file-input" type="file" accept=".msg" multiple hidden>
-                <span class="dropzone-label">Drop Outlook <code>.msg</code> files here</span>
-                <span class="dropzone-copy">Or use the buttons above.</span>
-              </label>
-
-              <div class="primary-card">
-                <div class="primary-copy">
-                  <p class="section-label">Next step</p>
-                  <h3 id="next-step-title">Add one or more Outlook messages</h3>
-                  <p class="control-copy" id="next-step-copy">
-                    The main button always handles the next step.
-                  </p>
-                </div>
-                <div class="primary-actions">
-                  <button class="button button-primary button-large" id="convert-button" type="button">Convert to PDF</button>
-                  <span class="folder-chip" id="output-folder-chip">Folder not selected</span>
-                </div>
-                <div class="primary-meta">
-                  <div class="meta-pill">
-                    <span class="meta-label">Queue</span>
-                    <strong id="queue-summary">No files queued yet.</strong>
-                  </div>
-                  <div class="meta-pill">
-                    <span class="meta-label">Saving to</span>
-                    <strong id="output-folder-label">Choose a folder.</strong>
-                  </div>
-                </div>
-              </div>
-            </div>
+            <label class="dropzone dropzone-intake" id="dropzone" for="file-input">
+              <input id="file-input" type="file" accept=".msg" multiple hidden>
+              <span class="dropzone-label">Drop emails here</span>
+              <span class="dropzone-copy">Supports Outlook drags and <code>.msg</code> files. Click to browse manually if needed.</span>
+            </label>
           </section>
 
-          <aside class="mailroom-panel">
-            <div class="mailroom-header">
-              <div>
-                <p class="section-label">Live process companion</p>
-                <h2>Mailroom Companion</h2>
-              </div>
-              <span class="pipeline-pill" id="pipeline-pill">Idle</span>
-            </div>
-
-            <p class="mailroom-copy" id="mailroom-summary">
-              Waiting for files. Drop messages or run the preview to watch the mailroom work.
-            </p>
-
-            <div class="mailroom-scene" id="mailroom-scene" data-stage="idle" data-pipeline="outlook_edge">
-              <div class="scene-glow"></div>
-              <div class="scene-track"></div>
-              <div class="scene-slot scene-slot-intake">Intake</div>
-              <div class="scene-slot scene-slot-output">Saved PDF</div>
-              <div class="scene-slot scene-slot-reject">Needs attention</div>
-              <img class="scene-press" src="/assets/mailroom/press.png" alt="">
-              <img class="scene-clerk" id="scene-clerk" src="/assets/mailroom/clerk.png" alt="">
-              <img class="scene-doc" id="scene-doc" src="/assets/mailroom/msg-document.png" alt="">
-              <div class="scene-status" id="scene-status">Idle</div>
-            </div>
-
-            <div class="mailroom-readout">
-              <div>
-                <span class="readout-label">Current file</span>
-                <strong id="mailroom-file">No batch loaded</strong>
-              </div>
-              <div>
-                <span class="readout-label">Stage</span>
-                <strong id="mailroom-stage">Idle</strong>
-              </div>
-            </div>
-
-            <div class="timeline" id="timeline">
-              <span data-stage="drop_received">Drop</span>
-              <span data-stage="parse_started">Prepare</span>
-              <span data-stage="filename_built">Name</span>
-              <span data-stage="pipeline_selected">Create PDF</span>
-              <span data-stage="pdf_written">Finish</span>
-              <span data-stage="complete">Save</span>
-            </div>
-
-            <div class="preview-row">
-              <label class="select-wrap">
-                <span>Preview style</span>
-                <select id="preview-pipeline">
-                  <option value="outlook_edge">Outlook Edge</option>
-                  <option value="edge_html">Edge HTML</option>
-                  <option value="reportlab">ReportLab</option>
-                </select>
-              </label>
-              <button class="button button-secondary" id="preview-button" type="button">Preview Animation</button>
-            </div>
-          </aside>
-        </section>
-
-        <section class="bottom-grid">
           <section class="queue-panel">
             <div class="panel-header">
               <div>
-                <p class="section-label">Queued messages</p>
+                <p class="section-label">Queued batch</p>
                 <h2>Queue</h2>
               </div>
               <button class="button button-secondary" id="clear-button" type="button">Clear Queue</button>
@@ -147,11 +54,13 @@
 
             <div class="queue-list" id="queue-list" hidden></div>
           </section>
+        </section>
 
+        <section class="side-column">
           <section class="status-panel">
             <div class="panel-header">
               <div>
-                <p class="section-label">Activity</p>
+                <p class="section-label">System log</p>
                 <h2>Activity</h2>
               </div>
               <div class="connection-status">
@@ -165,6 +74,6 @@
       </main>
     </div>
 
-    <script type="module" src="/static/app.js"></script>
+    <script type="module" src="/static/app.js?v=queue-progress-bars-6"></script>
   </body>
 </html>

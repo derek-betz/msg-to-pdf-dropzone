@@ -40,17 +40,32 @@ class StagedFile:
     size_bytes: int
     source: str
     created_at: str
+    stage: str = "files_accepted"
+    pipeline: str | None = None
+    error: str | None = None
+    success: bool | None = None
+    output_path: str | None = None
     cleanup: bool = True
 
     def to_dict(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "id": self.id,
             "taskId": self.task_id,
             "name": self.name,
             "sizeBytes": self.size_bytes,
             "source": self.source,
             "createdAt": self.created_at,
+            "stage": self.stage,
         }
+        if self.pipeline is not None:
+            payload["pipeline"] = self.pipeline
+        if self.error is not None:
+            payload["error"] = self.error
+        if self.success is not None:
+            payload["success"] = self.success
+        if self.output_path is not None:
+            payload["outputPath"] = self.output_path
+        return payload
 
 
 class EventBroker:
@@ -88,7 +103,8 @@ class StageStore:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._items: dict[str, StagedFile] = {}
-        STAGING_DIR.mkdir(parents=True, exist_ok=True)
+        self._staging_dir = STAGING_DIR
+        self._staging_dir.mkdir(parents=True, exist_ok=True)
         atexit.register(self._cleanup_on_exit)
 
     def snapshot(self) -> list[dict[str, object]]:
@@ -99,8 +115,12 @@ class StageStore:
         with self._lock:
             return len(self._items)
 
+    def active_count(self) -> int:
+        with self._lock:
+            return sum(1 for item in self._items.values() if item.stage != "complete")
+
     def remaining_slots(self) -> int:
-        return max(0, MAX_FILES_PER_BATCH - self.count())
+        return max(0, MAX_FILES_PER_BATCH - self.active_count())
 
     async def stage_uploads(self, uploads: list[UploadFile]) -> list[StagedFile]:
         staged: list[StagedFile] = []
@@ -108,7 +128,8 @@ class StageStore:
             try:
                 if not upload.filename or Path(upload.filename).suffix.lower() != ".msg":
                     continue
-                target = STAGING_DIR / f"{uuid4().hex}-{Path(upload.filename).name}"
+                self._staging_dir.mkdir(parents=True, exist_ok=True)
+                target = self._staging_dir / f"{uuid4().hex}-{Path(upload.filename).name}"
                 with target.open("wb") as handle:
                     while True:
                         chunk = await upload.read(1024 * 1024)
@@ -148,6 +169,31 @@ class StageStore:
             raise HTTPException(status_code=400, detail="No queued .msg files were selected.")
         return items
 
+    def resolve_convertible_items(self, ids: list[str]) -> list[StagedFile]:
+        items = self.resolve_items(ids)
+        convertible = [item for item in items if item.stage != "complete"]
+        if not convertible:
+            raise HTTPException(status_code=400, detail="Selected .msg files are already complete.")
+        return convertible
+
+    def apply_task_event(self, event: TaskEvent) -> None:
+        output_path = None
+        if event.meta:
+            raw_output_path = event.meta.get("outputPath")
+            if isinstance(raw_output_path, str) and raw_output_path:
+                output_path = raw_output_path
+
+        with self._lock:
+            item = next((candidate for candidate in self._items.values() if candidate.task_id == event.task_id), None)
+            if item is None:
+                return
+            item.stage = event.stage
+            item.pipeline = event.pipeline
+            item.error = event.error
+            item.success = event.success
+            if output_path is not None:
+                item.output_path = output_path
+
     def _register(self, path: Path, *, name: str, source: str) -> StagedFile:
         item = StagedFile(
             id=uuid4().hex[:12],
@@ -175,11 +221,6 @@ class StageStore:
 
     def _cleanup_on_exit(self) -> None:
         self.clear()
-        try:
-            if STAGING_DIR.exists() and not any(STAGING_DIR.iterdir()):
-                STAGING_DIR.rmdir()
-        except Exception:
-            pass
 
 
 class RemoveRequest(BaseModel):
@@ -278,6 +319,10 @@ def create_app() -> FastAPI:
     app.state.stage_store = StageStore()
     app.state.event_broker = EventBroker()
 
+    def publish_task_event(event: TaskEvent) -> None:
+        app.state.stage_store.apply_task_event(event)
+        app.state.event_broker.publish_task_event(event)
+
     app.mount("/static", StaticFiles(directory=str(WEB_UI_DIR)), name="static")
     app.mount("/assets", StaticFiles(directory=str(ASSET_DIR)), name="assets")
 
@@ -299,13 +344,13 @@ def create_app() -> FastAPI:
     async def upload(files: list[UploadFile] = File(...)) -> dict[str, object]:
         stage_store: StageStore = app.state.stage_store
         event_broker: EventBroker = app.state.event_broker
-        queued_before = stage_store.count()
+        queued_before = stage_store.active_count()
         staged = await stage_store.stage_uploads(files)
         batch_meta = build_batch_meta(staged)
         for item in staged:
             meta = batch_meta[item.path.resolve()]
-            emit_task_event(event_broker.publish_task_event, task_id=item.task_id, stage="drop_received", file_name=item.name, meta=meta)
-            emit_task_event(event_broker.publish_task_event, task_id=item.task_id, stage="files_accepted", file_name=item.name, meta=meta)
+            emit_task_event(publish_task_event, task_id=item.task_id, stage="drop_received", file_name=item.name, meta=meta)
+            emit_task_event(publish_task_event, task_id=item.task_id, stage="files_accepted", file_name=item.name, meta=meta)
         if staged:
             event_broker.publish_status(kind="status", message=f"Queued {len(staged)} .msg file(s).")
         rejected_count = max(0, len(files) - len(staged))
@@ -333,8 +378,8 @@ def create_app() -> FastAPI:
         batch_meta = build_batch_meta(staged)
         for item in staged:
             meta = batch_meta[item.path.resolve()]
-            emit_task_event(event_broker.publish_task_event, task_id=item.task_id, stage="outlook_extract_started", file_name=item.name, meta=meta)
-            emit_task_event(event_broker.publish_task_event, task_id=item.task_id, stage="files_accepted", file_name=item.name, meta=meta)
+            emit_task_event(publish_task_event, task_id=item.task_id, stage="outlook_extract_started", file_name=item.name, meta=meta)
+            emit_task_event(publish_task_event, task_id=item.task_id, stage="files_accepted", file_name=item.name, meta=meta)
         if staged:
             event_broker.publish_status(kind="status", message=f"Imported {len(staged)} message(s) from Outlook.")
         return {"items": stage_store.snapshot(), "accepted": [item.to_dict() for item in staged]}
@@ -368,14 +413,14 @@ def create_app() -> FastAPI:
     async def convert(request: ConvertRequest) -> dict[str, object]:
         stage_store: StageStore = app.state.stage_store
         event_broker: EventBroker = app.state.event_broker
-        items = stage_store.resolve_items(request.ids)
+        items = stage_store.resolve_convertible_items(request.ids)
         output_dir = Path(request.output_dir).expanduser()
         output_dir.mkdir(parents=True, exist_ok=True)
 
         batch_meta = build_batch_meta(items)
         for item in items:
             emit_task_event(
-                event_broker.publish_task_event,
+                publish_task_event,
                 task_id=item.task_id,
                 stage="output_folder_selected",
                 file_name=item.name,
@@ -391,11 +436,10 @@ def create_app() -> FastAPI:
             convert_msg_files,
             [item.path for item in items],
             output_dir,
-            event_sink=event_broker.publish_task_event,
+            event_sink=publish_task_event,
             task_ids_by_source_path=task_ids_by_source_path,
             batch_meta_by_source_path=batch_meta,
         )
-        stage_store.remove(request.ids)
         if result.converted_files:
             event_broker.publish_status(kind="status", message=f"Converted {len(result.converted_files)} of {result.requested_count} file(s).")
         if result.errors:
