@@ -79,6 +79,22 @@ def test_upload_and_convert_flow(monkeypatch, tmp_path: Path) -> None:
     assert items[0]["stage"] == "complete"
 
 
+def test_upload_accepts_outlook_source_hint(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("msg_to_pdf_dropzone.web_server.STAGING_DIR", tmp_path / "staging")
+    client = TestClient(create_app())
+
+    upload = client.post(
+        "/api/upload",
+        files=[("files", ("sample.msg", BytesIO(b"msg-bytes"), "application/vnd.ms-outlook"))],
+        data={"source_hint": "outlook"},
+    )
+    assert upload.status_code == 200
+    payload = upload.json()
+    assert len(payload["accepted"]) == 1
+    assert payload["accepted"][0]["source"] == "outlook"
+    assert payload["items"][0]["source"] == "outlook"
+
+
 def test_completed_items_stay_visible_without_blocking_new_uploads(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr("msg_to_pdf_dropzone.web_server.STAGING_DIR", tmp_path / "staging")
 

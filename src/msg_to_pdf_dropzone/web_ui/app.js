@@ -268,11 +268,21 @@ const PIPELINE_LABELS = {
   reportlab: "ReportLab",
 };
 
+const QUEUE_FILTERS = ["all", "waiting", "converting", "failed", "converted"];
+const DEFAULT_DROP_COPY = "Supports Outlook drags and .msg files. Click to browse manually if needed.";
+
 const state = {
   maxFiles: 25,
   items: [],
   queueProgressByTaskId: {},
+  pendingRemovalsById: {},
+  expandedQueueItemsById: {},
+  queueFilter: "all",
+  outputDir: "",
+  activeConvertIds: [],
+  celebratoryPulseTimer: 0,
   statuses: [],
+  statusLogExpanded: false,
   isBusy: false,
   mailroom: {
     stage: "idle",
@@ -288,13 +298,18 @@ const elements = {
   connectionStatus: document.getElementById("connection-status"),
   convertButton: document.getElementById("convert-button"),
   dropzone: document.getElementById("dropzone"),
+  dropzoneCopy: document.getElementById("dropzone-copy"),
   fileInput: document.getElementById("file-input"),
   queueCountBadge: document.getElementById("queue-count-badge"),
   queueEmpty: document.getElementById("queue-empty"),
+  queueFilters: document.getElementById("queue-filters"),
   queueList: document.getElementById("queue-list"),
+  queuePanel: document.querySelector(".queue-panel"),
   queueSummary: document.getElementById("queue-summary"),
   shell: document.querySelector(".shell"),
+  statusPanel: document.getElementById("status-panel"),
   statusLog: document.getElementById("status-log"),
+  statusToggle: document.getElementById("status-toggle"),
 };
 
 function escapeHtml(value) {
@@ -340,6 +355,92 @@ function queueStageLabel(stage) {
     return "Failed";
   }
   return STAGE_CONFIG[stage]?.status || STAGE_CONFIG[stage]?.label || "Queued";
+}
+
+function queueVisualState(item, progress) {
+  const stage = item?.stage || "";
+  if (stage === "complete" || progress?.tone === "complete") {
+    return {
+      tone: "complete",
+      icon: "v",
+      iconLabel: "Conversion complete",
+    };
+  }
+  if (stage === "failed" || progress?.tone === "failed") {
+    return {
+      tone: "failed",
+      icon: "x",
+      iconLabel: "Conversion failed",
+    };
+  }
+  if (progress?.active) {
+    return {
+      tone: "active",
+      icon: "~",
+      iconLabel: "Converting",
+    };
+  }
+  return {
+    tone: "queued",
+    icon: ".",
+    iconLabel: "Queued and waiting",
+  };
+}
+
+function isQueueItemTerminal(item) {
+  return item.stage === "complete" || item.stage === "failed";
+}
+
+function isQueueItemConverting(item) {
+  const progress = queueProgressStateForItem(item);
+  return Boolean(progress?.active && progress.tone === "active");
+}
+
+function matchesQueueFilter(item, filter) {
+  if (filter === "all") {
+    return true;
+  }
+  if (filter === "converted") {
+    return item.stage === "complete";
+  }
+  if (filter === "failed") {
+    return item.stage === "failed";
+  }
+  if (filter === "converting") {
+    return isQueueItemConverting(item);
+  }
+  if (filter === "waiting") {
+    return !isQueueItemTerminal(item) && !isQueueItemConverting(item);
+  }
+  return true;
+}
+
+function filterQueueItems(items) {
+  return items.filter((item) => matchesQueueFilter(item, state.queueFilter));
+}
+
+function queueFilterLabel(filter) {
+  if (filter === "all") {
+    return "All";
+  }
+  if (filter === "waiting") {
+    return "Waiting";
+  }
+  if (filter === "converting") {
+    return "Converting";
+  }
+  if (filter === "failed") {
+    return "Failed";
+  }
+  return "Converted";
+}
+
+function deriveOutputNamePreview(item) {
+  if (item.outputPath) {
+    const parts = String(item.outputPath).split(/[/\\]/).filter(Boolean);
+    return parts[parts.length - 1] || item.outputPath;
+  }
+  return "Generated when conversion runs";
 }
 
 function buildQueueProgressStateFromSnapshot(item) {
@@ -509,7 +610,6 @@ function renderStatusLog() {
     elements.statusLog.innerHTML = `
       <div class="status-line">
         <strong>Ready for intake.</strong>
-        <span class="status-line-meta">Drop emails here or click the intake field to browse for .msg files.</span>
       </div>
     `;
     return;
@@ -522,11 +622,21 @@ function renderStatusLog() {
       return `
         <div class="status-line ${toneClass}">
           <strong>${escapeHtml(entry.message)}</strong>
-          <span class="status-line-meta">${escapeHtml(entry.meta || "Local workstation session")}</span>
         </div>
       `;
     })
     .join("");
+}
+
+function setStatusLogExpanded(expanded) {
+  if (!elements.statusPanel || !elements.statusToggle) {
+    return;
+  }
+  state.statusLogExpanded = Boolean(expanded);
+  elements.shell.classList.toggle("layout-log-collapsed", !state.statusLogExpanded);
+  elements.statusPanel.classList.toggle("is-collapsed", !state.statusLogExpanded);
+  elements.statusToggle.textContent = state.statusLogExpanded ? "Hide Activity" : "Show Activity";
+  elements.statusToggle.setAttribute("aria-expanded", state.statusLogExpanded ? "true" : "false");
 }
 
 function setBusy(isBusy) {
@@ -535,60 +645,129 @@ function setBusy(isBusy) {
   updateActionState();
 }
 
+function renderQueueFilters() {
+  if (!elements.queueFilters) {
+    return;
+  }
+  const counts = {
+    all: state.items.length,
+    waiting: state.items.filter((item) => matchesQueueFilter(item, "waiting")).length,
+    converting: state.items.filter((item) => matchesQueueFilter(item, "converting")).length,
+    failed: state.items.filter((item) => matchesQueueFilter(item, "failed")).length,
+    converted: state.items.filter((item) => matchesQueueFilter(item, "converted")).length,
+  };
+  elements.queueFilters.innerHTML = QUEUE_FILTERS.map((filter) => {
+    const selected = filter === state.queueFilter;
+    return `
+      <button class="queue-filter-chip ${selected ? "is-selected" : ""}" type="button" data-filter="${filter}" role="tab" aria-selected="${selected ? "true" : "false"}">
+        ${queueFilterLabel(filter)} <span>${counts[filter]}</span>
+      </button>
+    `;
+  }).join("");
+}
+
+function celebrateQueueCompletion() {
+  if (!elements.queuePanel) {
+    return;
+  }
+  if (state.celebratoryPulseTimer) {
+    clearTimeout(state.celebratoryPulseTimer);
+  }
+  elements.queuePanel.classList.add("is-celebrating");
+  state.celebratoryPulseTimer = window.setTimeout(() => {
+    elements.queuePanel.classList.remove("is-celebrating");
+    state.celebratoryPulseTimer = 0;
+  }, 1400);
+}
+
 function updateActionState() {
   const queuedCount = state.items.length;
   const convertibleCount = state.items.filter((item) => item.stage !== "complete").length;
   const hasItems = queuedCount > 0;
   const hasConvertibleItems = convertibleCount > 0;
   const busy = state.isBusy;
+  const outputReady = Boolean(state.outputDir);
+  const completedDuringRun = state.activeConvertIds.length
+    ? state.activeConvertIds.filter((id) => {
+        const item = state.items.find((candidate) => candidate.id === id);
+        return Boolean(item && isQueueItemTerminal(item));
+      }).length
+    : 0;
 
   elements.clearButton.disabled = busy || !hasItems;
   elements.convertButton.disabled = busy || !hasConvertibleItems;
-  elements.convertButton.textContent = `Convert ${convertibleCount} File${convertibleCount === 1 ? "" : "s"} to PDF`;
-
-  if (!hasConvertibleItems) {
+  if (busy && state.activeConvertIds.length) {
+    elements.convertButton.textContent = `Converting ${completedDuringRun}/${state.activeConvertIds.length}...`;
+  } else if (!hasConvertibleItems) {
     elements.convertButton.textContent = "Convert to PDF";
+  } else if (!outputReady) {
+    elements.convertButton.textContent = "Choose Save Folder";
+  } else {
+    elements.convertButton.textContent = `Convert ${convertibleCount} File${convertibleCount === 1 ? "" : "s"} to PDF`;
   }
+  renderQueueFilters();
 }
 
 function renderQueue() {
-  const queuedCount = state.items.length;
-  elements.queueCountBadge.textContent = `${queuedCount} queued`;
+  const filteredItems = filterQueueItems(state.items);
+  const queuedCount = filteredItems.length;
+  elements.queueCountBadge.textContent = `${state.items.length} queued`;
 
   elements.queueEmpty.hidden = queuedCount > 0;
   elements.queueList.hidden = queuedCount === 0;
 
   if (!queuedCount) {
+    elements.queueEmpty.textContent = state.items.length ? "No files match this filter." : "Add Outlook messages to start.";
     elements.queueList.innerHTML = "";
     updateActionState();
     return;
   }
+  elements.queueEmpty.textContent = "Add Outlook messages to start.";
 
-  elements.queueList.innerHTML = state.items
+  elements.queueList.innerHTML = filteredItems
     .map(
       (item) => {
         const progress = queueProgressStateForItem(item);
-        const disabled = state.isBusy ? "disabled" : "";
+        const canRemove = item.stage !== "complete";
+        const canRetry = item.stage === "failed";
+        const isExpanded = Boolean(state.expandedQueueItemsById[item.id]);
+        const isRemoving = Boolean(state.pendingRemovalsById[item.id]);
         const hasProgress = Boolean(progress?.active);
-        const progressLabel = progress?.label || "Queued";
+        const progressLabel = progress?.label || queueStageLabel(item.stage);
         const progressPercent = Math.round(progress?.percent || 0);
-        const classes = ["queue-item"];
-        if (hasProgress) {
-          classes.push("has-progress", `is-${progress.tone}`);
-        }
+        const progressMetric = hasProgress ? `${progressPercent}%` : "Waiting";
+        const visual = queueVisualState(item, progress);
+        const classes = ["queue-item", `is-${visual.tone}`];
         return `
-        <div class="${classes.join(" ")}" ${hasProgress ? `style="--queue-progress: ${progress.percent}"` : ""}>
+        <div class="${classes.join(" ")}" style="--queue-progress: ${hasProgress ? progress.percent : 0}">
           <div class="queue-main">
-            <span class="source-pill">${escapeHtml(formatSource(item.source))}</span>
+            <span class="queue-file-glyph" aria-hidden="true">@</span>
             <div class="queue-copy">
               <div class="queue-name" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</div>
-              <div class="queue-stage-row" ${hasProgress ? "" : "hidden"}>
+              <div class="queue-stage-row">
                 <span class="queue-stage-label">${escapeHtml(progressLabel)}</span>
-                <span class="queue-stage-percent">${progressPercent}%</span>
+                <span class="queue-stage-percent">${escapeHtml(progressMetric)}</span>
               </div>
             </div>
           </div>
-          <button class="remove-pill" data-remove-id="${escapeHtml(item.id)}" type="button" ${disabled}>Remove</button>
+          <div class="queue-actions">
+            <span class="queue-state-icon is-${visual.tone}" title="${escapeHtml(visual.iconLabel)}" aria-label="${escapeHtml(visual.iconLabel)}">${escapeHtml(visual.icon)}</span>
+            <button class="queue-details-toggle ${isExpanded ? "is-open" : ""}" data-details-id="${escapeHtml(item.id)}" type="button" title="Toggle details">${isExpanded ? "Hide" : "Details"}</button>
+            ${canRetry ? `<button class="queue-retry" data-retry-id="${escapeHtml(item.id)}" type="button" title="Retry this file">Retry</button>` : ""}
+            ${
+              canRemove
+                ? `<button class="queue-remove ${isRemoving ? "is-pending" : ""}" data-remove-id="${escapeHtml(item.id)}" type="button" title="Remove from queue" aria-busy="${isRemoving ? "true" : "false"}">${isRemoving ? "Removing..." : "Remove"}</button>`
+                : `<span class="queue-complete-badge" title="Already converted">Converted</span>`
+            }
+          </div>
+          <div class="queue-details ${isExpanded ? "is-visible" : ""}" ${isExpanded ? "" : "hidden"}>
+            <span><strong>Pipeline:</strong> ${escapeHtml(item.pipeline ? pipelineLabel(item.pipeline) : "Pending")}</span>
+            <span><strong>Output:</strong> ${escapeHtml(deriveOutputNamePreview(item))}</span>
+            ${item.stage === "failed" ? `<span class="queue-error-line"><strong>Issue:</strong> ${escapeHtml(item.error || "No failure details were returned.")}</span>` : ""}
+          </div>
+          <div class="queue-progress-track" aria-hidden="true">
+            <span class="queue-progress-fill"></span>
+          </div>
         </div>
       `;
       },
@@ -605,6 +784,7 @@ function renderMailroom() {
 function applyQueueSnapshot(items) {
   const nextItems = items || [];
   const nextProgress = {};
+  const idSet = new Set(nextItems.map((item) => item.id));
   nextItems.forEach((item) => {
     const existing = state.queueProgressByTaskId[item.taskId];
     if (existing?.active) {
@@ -617,6 +797,9 @@ function applyQueueSnapshot(items) {
     }
   });
   state.queueProgressByTaskId = nextProgress;
+  state.pendingRemovalsById = Object.fromEntries(Object.entries(state.pendingRemovalsById).filter(([id]) => idSet.has(id)));
+  state.expandedQueueItemsById = Object.fromEntries(Object.entries(state.expandedQueueItemsById).filter(([id]) => idSet.has(id)));
+  state.activeConvertIds = state.activeConvertIds.filter((id) => idSet.has(id));
   state.items = nextItems;
   renderQueue();
 }
@@ -654,6 +837,10 @@ function mergeQueueEvent(payload) {
   if (!payload.taskId) {
     return;
   }
+  const outputPath =
+    payload.outputPath ||
+    (payload.meta && typeof payload.meta.outputPath === "string" ? payload.meta.outputPath : "") ||
+    "";
   let changed = false;
   state.items = state.items.map((item) => {
     if (item.taskId !== payload.taskId) {
@@ -666,6 +853,7 @@ function mergeQueueEvent(payload) {
       pipeline: payload.pipeline || item.pipeline,
       error: payload.error || item.error,
       success: typeof payload.success === "boolean" ? payload.success : item.success,
+      outputPath: outputPath || item.outputPath,
     };
   });
   if (changed) {
@@ -715,12 +903,21 @@ async function loadQueue() {
   applyQueueSnapshot(payload.items || []);
 }
 
-async function uploadFiles(files) {
+function detectUploadSourceFromDrop(dataTransfer) {
+  const types = Array.from(dataTransfer?.types || []).map((value) => String(value).toLowerCase());
+  if (types.some((value) => value.includes("filegroupdescriptor") || value.includes("outlook"))) {
+    return "outlook";
+  }
+  return "upload";
+}
+
+async function uploadFiles(files, { sourceHint = "upload" } = {}) {
   if (!files?.length) {
     return;
   }
   const formData = new FormData();
   [...files].forEach((file) => formData.append("files", file));
+  formData.append("source_hint", sourceHint);
   const payload = await api("/api/upload", { method: "POST", body: formData });
   applyQueueSnapshot(payload.items || []);
   if (payload.accepted?.length) {
@@ -742,7 +939,9 @@ async function chooseOutputFolder({ silentCancel = false } = {}) {
     }
     return false;
   }
+  state.outputDir = payload.outputDir;
   addStatus("Save folder selected.", { tone: "success", meta: payload.outputDir });
+  updateActionState();
   return payload;
 }
 
@@ -753,28 +952,75 @@ async function convertQueue() {
     return;
   }
 
-  const selected = await chooseOutputFolder({ silentCancel: true });
-  if (!selected) {
-    addStatus("Choose a save folder to continue.", { tone: "error", meta: "Conversion paused" });
-    return;
+  if (!state.outputDir) {
+    const selected = await chooseOutputFolder({ silentCancel: false });
+    if (!selected) {
+      addStatus("Choose a save folder to continue.", { tone: "error", meta: "Conversion paused" });
+      return;
+    }
   }
 
   const ids = convertibleItems.map((item) => item.id);
+  state.activeConvertIds = ids;
   convertibleItems.forEach((item) => activateQueueProgress(item.taskId));
   renderQueue();
   startQueueProgressLoop();
-  addStatus(`Starting conversion for ${ids.length} file(s).`, { tone: "preview", meta: selected.outputDir });
-  const payload = await api("/api/convert", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ids, output_dir: selected.outputDir }),
-  });
-  await loadQueue();
-  if (payload.convertedFiles?.length) {
-    addStatus(`Converted ${payload.convertedFiles.length} file(s).`, { tone: "success", meta: "PDF batch complete" });
+  addStatus(`Starting conversion for ${ids.length} file(s).`, { tone: "preview", meta: state.outputDir });
+
+  try {
+    const payload = await api("/api/convert", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids, output_dir: state.outputDir }),
+    });
+    await loadQueue();
+    if (payload.convertedFiles?.length) {
+      addStatus(`Converted ${payload.convertedFiles.length} file(s).`, { tone: "success", meta: "PDF batch complete" });
+      celebrateQueueCompletion();
+    }
+    if (payload.errors?.length) {
+      payload.errors.forEach((error) => addStatus(error, { tone: "error", meta: "Conversion error" }));
+    }
+  } finally {
+    state.activeConvertIds = [];
+    updateActionState();
   }
-  if (payload.errors?.length) {
-    payload.errors.forEach((error) => addStatus(error, { tone: "error", meta: "Conversion error" }));
+}
+
+async function retryItem(id) {
+  const target = state.items.find((item) => item.id === id);
+  if (!target || target.stage !== "failed") {
+    return;
+  }
+  if (!state.outputDir) {
+    const selected = await chooseOutputFolder({ silentCancel: false });
+    if (!selected) {
+      addStatus("Choose a save folder before retrying.", { tone: "error", meta: "Retry paused" });
+      return;
+    }
+  }
+  state.activeConvertIds = [id];
+  activateQueueProgress(target.taskId);
+  renderQueue();
+  startQueueProgressLoop();
+  addStatus(`Retrying ${target.name}.`, { tone: "preview", meta: state.outputDir });
+  try {
+    const payload = await api("/api/convert", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: [id], output_dir: state.outputDir }),
+    });
+    await loadQueue();
+    if (payload.convertedFiles?.length) {
+      addStatus("Retry succeeded.", { tone: "success", meta: target.name });
+      celebrateQueueCompletion();
+    }
+    if (payload.errors?.length) {
+      payload.errors.forEach((error) => addStatus(error, { tone: "error", meta: "Retry error" }));
+    }
+  } finally {
+    state.activeConvertIds = [];
+    updateActionState();
   }
 }
 
@@ -812,16 +1058,101 @@ function installQueueEvents() {
     if (!(target instanceof HTMLElement)) {
       return;
     }
-    const button = target.closest("[data-remove-id]");
-    if (!button) {
+    const detailsToggle = target.closest("[data-details-id]");
+    if (detailsToggle instanceof HTMLButtonElement) {
+      const detailsId = detailsToggle.dataset.detailsId || "";
+      if (!detailsId) {
+        return;
+      }
+      if (state.expandedQueueItemsById[detailsId]) {
+        const nextExpanded = { ...state.expandedQueueItemsById };
+        delete nextExpanded[detailsId];
+        state.expandedQueueItemsById = nextExpanded;
+      } else {
+        state.expandedQueueItemsById = {
+          ...state.expandedQueueItemsById,
+          [detailsId]: true,
+        };
+      }
+      renderQueue();
       return;
     }
-    try {
-      await runBusy(() => removeItem(button.dataset.removeId || ""));
-    } catch (error) {
-      addStatus(error.message, { tone: "error", meta: "Remove failed" });
+
+    const retryButton = target.closest("[data-retry-id]");
+    if (retryButton instanceof HTMLButtonElement) {
+      if (state.isBusy) {
+        addStatus("Wait for the current conversion before retrying.", { tone: "info", meta: "Retry locked during conversion" });
+        return;
+      }
+      try {
+        await runBusy(() => retryItem(retryButton.dataset.retryId || ""));
+      } catch (error) {
+        addStatus(error.message, { tone: "error", meta: "Retry failed" });
+      }
+      return;
+    }
+
+    const removeButton = target.closest("[data-remove-id]");
+    if (removeButton instanceof HTMLButtonElement) {
+      if (state.isBusy) {
+        addStatus("Please wait for the current conversion to finish before removing files.", { tone: "info", meta: "Queue locked during conversion" });
+        return;
+      }
+      const removeId = removeButton.dataset.removeId || "";
+      if (!removeId || state.pendingRemovalsById[removeId]) {
+        return;
+      }
+      try {
+        state.pendingRemovalsById = {
+          ...state.pendingRemovalsById,
+          [removeId]: true,
+        };
+        renderQueue();
+        await removeItem(removeId);
+      } catch (error) {
+        addStatus(error.message, { tone: "error", meta: "Remove failed" });
+      } finally {
+        const nextPending = { ...state.pendingRemovalsById };
+        delete nextPending[removeId];
+        state.pendingRemovalsById = nextPending;
+        renderQueue();
+      }
     }
   });
+
+  if (elements.queueFilters) {
+    elements.queueFilters.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) {
+        return;
+      }
+      const filterButton = target.closest("[data-filter]");
+      if (!(filterButton instanceof HTMLButtonElement)) {
+        return;
+      }
+      const filter = filterButton.dataset.filter || "all";
+      if (!QUEUE_FILTERS.includes(filter)) {
+        return;
+      }
+      state.queueFilter = filter;
+      renderQueue();
+    });
+  }
+}
+
+function setDropzoneCopy(mode) {
+  if (!elements.dropzoneCopy) {
+    return;
+  }
+  if (mode === "outlook") {
+    elements.dropzoneCopy.textContent = "Drop to queue Outlook messages from your desktop client.";
+    return;
+  }
+  if (mode === "upload") {
+    elements.dropzoneCopy.textContent = "Drop to queue .msg files from your workstation.";
+    return;
+  }
+  elements.dropzoneCopy.textContent = DEFAULT_DROP_COPY;
 }
 
 function installDropzoneEvents() {
@@ -834,6 +1165,8 @@ function installDropzoneEvents() {
     elements.dropzone.addEventListener(eventName, (event) => {
       prevent(event);
       elements.dropzone.classList.add("is-dragover");
+      const sourceHint = detectUploadSourceFromDrop(event.dataTransfer);
+      setDropzoneCopy(sourceHint === "outlook" ? "outlook" : "upload");
     });
   });
 
@@ -841,12 +1174,14 @@ function installDropzoneEvents() {
     elements.dropzone.addEventListener(eventName, (event) => {
       prevent(event);
       elements.dropzone.classList.remove("is-dragover");
+      setDropzoneCopy("default");
     });
   });
 
   elements.dropzone.addEventListener("drop", async (event) => {
     try {
-      await runBusy(() => uploadFiles(event.dataTransfer?.files));
+      const sourceHint = detectUploadSourceFromDrop(event.dataTransfer);
+      await runBusy(() => uploadFiles(event.dataTransfer?.files, { sourceHint }));
     } catch (error) {
       addStatus(error.message, { tone: "error", meta: "Upload failed" });
     }
@@ -890,6 +1225,10 @@ function installActionEvents() {
 
   elements.convertButton.addEventListener("click", async () => {
     try {
+      if (!state.outputDir) {
+        await chooseOutputFolder({ silentCancel: false });
+        return;
+      }
       await runBusy(convertQueue);
     } catch (error) {
       addStatus(error.message, { tone: "error", meta: "Conversion failed" });
@@ -903,9 +1242,17 @@ function installActionEvents() {
       addStatus(error.message, { tone: "error", meta: "Clear failed" });
     }
   });
+
+  if (elements.statusToggle) {
+    elements.statusToggle.addEventListener("click", () => {
+      setStatusLogExpanded(!state.statusLogExpanded);
+    });
+  }
 }
 
 async function bootstrap() {
+  setStatusLogExpanded(false);
+  setDropzoneCopy("default");
   renderMailroom();
   renderStatusLog();
   renderQueue();

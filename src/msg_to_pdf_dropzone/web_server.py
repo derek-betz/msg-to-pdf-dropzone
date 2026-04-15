@@ -15,7 +15,7 @@ from typing import Any
 from uuid import uuid4
 import webbrowser
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -122,8 +122,9 @@ class StageStore:
     def remaining_slots(self) -> int:
         return max(0, MAX_FILES_PER_BATCH - self.active_count())
 
-    async def stage_uploads(self, uploads: list[UploadFile]) -> list[StagedFile]:
+    async def stage_uploads(self, uploads: list[UploadFile], *, source: str = "upload") -> list[StagedFile]:
         staged: list[StagedFile] = []
+        normalized_source = "outlook" if source == "outlook" else "upload"
         for upload in uploads[: self.remaining_slots()]:
             try:
                 if not upload.filename or Path(upload.filename).suffix.lower() != ".msg":
@@ -136,7 +137,7 @@ class StageStore:
                         if not chunk:
                             break
                         handle.write(chunk)
-                staged.append(self._register(target, name=Path(upload.filename).name, source="upload"))
+                staged.append(self._register(target, name=Path(upload.filename).name, source=normalized_source))
             finally:
                 await upload.close()
         return staged
@@ -341,11 +342,12 @@ def create_app() -> FastAPI:
         return {"items": stage_store.snapshot(), "maxFiles": MAX_FILES_PER_BATCH}
 
     @app.post("/api/upload")
-    async def upload(files: list[UploadFile] = File(...)) -> dict[str, object]:
+    async def upload(files: list[UploadFile] = File(...), source_hint: str = Form("upload")) -> dict[str, object]:
         stage_store: StageStore = app.state.stage_store
         event_broker: EventBroker = app.state.event_broker
         queued_before = stage_store.active_count()
-        staged = await stage_store.stage_uploads(files)
+        normalized_source = "outlook" if source_hint == "outlook" else "upload"
+        staged = await stage_store.stage_uploads(files, source=normalized_source)
         batch_meta = build_batch_meta(staged)
         for item in staged:
             meta = batch_meta[item.path.resolve()]

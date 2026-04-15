@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>MSG to PDF Dropzone</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect width='48' height='48' rx='12' fill='%231f446d'/%3E%3Cpath d='M16 34L22 13h6l4 12 4-8h5l-7 17h-6l-3-9-3 9z' fill='%23f5efe0'/%3E%3C/svg%3E">
-    <link rel="stylesheet" href="/static/app.css?v=queue-progress-bars-6">
+    <link rel="stylesheet" href="/static/app.css?v=queue-progress-bars-15">
   </head>
   <body>
     <div class="shell">
@@ -35,7 +35,7 @@
             <label class="dropzone dropzone-intake" id="dropzone" for="file-input">
               <input id="file-input" type="file" accept=".msg" multiple hidden>
               <span class="dropzone-label">Drop emails here</span>
-              <span class="dropzone-copy">Supports Outlook drags and <code>.msg</code> files. Click to browse manually if needed.</span>
+              <span class="dropzone-copy" id="dropzone-copy">Supports Outlook drags and <code>.msg</code> files. Click to browse manually if needed.</span>
             </label>
           </section>
 
@@ -48,6 +48,8 @@
               <button class="button button-secondary" id="clear-button" type="button">Clear Queue</button>
             </div>
 
+            <div class="queue-filters" id="queue-filters" role="tablist" aria-label="Queue filters"></div>
+
             <div class="queue-empty" id="queue-empty">
               Add Outlook messages to start.
             </div>
@@ -57,15 +59,20 @@
         </section>
 
         <section class="side-column">
-          <section class="status-panel">
+          <section class="status-panel is-collapsed" id="status-panel">
             <div class="panel-header">
               <div>
                 <p class="section-label">System log</p>
                 <h2>Activity</h2>
               </div>
-              <div class="connection-status">
-                <span class="status-dot" id="connection-dot"></span>
-                <span id="connection-status">Connecting...</span>
+              <div class="status-header-tools">
+                <div class="connection-status">
+                  <span class="status-dot" id="connection-dot"></span>
+                  <span id="connection-status">Connecting...</span>
+                </div>
+                <button class="button button-secondary status-toggle" id="status-toggle" type="button" aria-expanded="false">
+                  Show Activity
+                </button>
               </div>
             </div>
             <div class="status-log" id="status-log" aria-live="polite"></div>
@@ -74,6 +81,6 @@
       </main>
     </div>
 
-    <script type="module" src="/static/app.js?v=queue-progress-bars-6"></script>
+    <script type="module" src="/static/app.js?v=queue-progress-bars-15"></script>
   </body>
 </html>
