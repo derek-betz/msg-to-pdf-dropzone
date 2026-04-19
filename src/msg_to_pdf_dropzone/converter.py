@@ -2,13 +2,19 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-import inspect
 from pathlib import Path
 from time import perf_counter
 
 from .msg_parser import parse_msg_file
 from .pdf_writer import PdfWriteDiagnostics, write_email_pdf
-from .task_events import TaskEventSink, TaskMetaValue, default_task_id_for_path, emit_task_event
+from .task_events import (
+    TaskEventSink,
+    TaskMetaValue,
+    build_batch_meta_for_paths,
+    default_task_id_for_path,
+    emit_task_event,
+    merge_event_meta,
+)
 from .thread_logic import build_pdf_filename, get_latest_thread_dates, make_unique_path
 
 MAX_FILES_PER_BATCH = 25
@@ -50,14 +56,6 @@ def _format_seconds(value: float) -> str:
     return f"{value:.2f}s"
 
 
-def _supports_keyword_argument(function_object: object, argument_name: str) -> bool:
-    try:
-        signature = inspect.signature(function_object)
-    except (TypeError, ValueError):
-        return False
-    return argument_name in signature.parameters
-
-
 def _resolve_task_id(
     source_path: Path,
     task_ids_by_source_path: Mapping[Path, str] | None,
@@ -91,18 +89,6 @@ def _resolve_event_meta(
     return dict(raw_meta)
 
 
-def _merge_event_meta(
-    base_meta: Mapping[str, TaskMetaValue] | None,
-    extra_meta: Mapping[str, TaskMetaValue] | None,
-) -> dict[str, TaskMetaValue] | None:
-    merged: dict[str, TaskMetaValue] = {}
-    if base_meta:
-        merged.update(base_meta)
-    if extra_meta:
-        merged.update(extra_meta)
-    return merged or None
-
-
 def convert_msg_files(
     msg_paths: list[Path],
     output_dir: Path,
@@ -121,10 +107,6 @@ def convert_msg_files(
     email_records = []
     parse_durations: dict[Path, float] = {}
     timing_lines: list[str] = []
-    supports_diagnostics = _supports_keyword_argument(write_email_pdf, "diagnostics")
-    supports_event_sink = _supports_keyword_argument(write_email_pdf, "event_sink")
-    supports_task_id = _supports_keyword_argument(write_email_pdf, "task_id")
-    supports_event_meta = _supports_keyword_argument(write_email_pdf, "event_meta")
 
     for msg_path in msg_paths:
         if msg_path.suffix and msg_path.suffix.lower() != ".msg":
@@ -199,7 +181,7 @@ def convert_msg_files(
                 task_id=task_id,
                 stage="filename_built",
                 file_name=record.source_path.name,
-                meta=_merge_event_meta(event_meta, {"outputName": output_path.name}),
+                meta=merge_event_meta(event_meta, {"outputName": output_path.name}),
             )
 
             write_started_at = perf_counter()
@@ -208,18 +190,16 @@ def convert_msg_files(
                 task_id=task_id,
                 stage="pdf_pipeline_started",
                 file_name=record.source_path.name,
-                meta=_merge_event_meta(event_meta, {"outputName": output_path.name}),
+                meta=merge_event_meta(event_meta, {"outputName": output_path.name}),
             )
-            write_kwargs: dict[str, object] = {}
-            if supports_diagnostics:
-                write_kwargs["diagnostics"] = diagnostics
-            if supports_event_sink:
-                write_kwargs["event_sink"] = event_sink
-            if supports_task_id:
-                write_kwargs["task_id"] = task_id
-            if supports_event_meta:
-                write_kwargs["event_meta"] = event_meta
-            write_email_pdf(record, output_path, **write_kwargs)
+            write_email_pdf(
+                record,
+                output_path,
+                diagnostics=diagnostics,
+                event_sink=event_sink,
+                task_id=task_id,
+                event_meta=event_meta,
+            )
             write_seconds = perf_counter() - write_started_at
             result.write_seconds += write_seconds
             result.converted_files.append(output_path)
@@ -230,7 +210,7 @@ def convert_msg_files(
                 stage="pdf_written",
                 file_name=record.source_path.name,
                 pipeline=pipeline_name,
-                meta=_merge_event_meta(
+                meta=merge_event_meta(
                     event_meta,
                     {
                         "outputName": output_path.name,
@@ -244,7 +224,7 @@ def convert_msg_files(
                 stage="deliver_started",
                 file_name=record.source_path.name,
                 pipeline=pipeline_name,
-                meta=_merge_event_meta(
+                meta=merge_event_meta(
                     event_meta,
                     {
                         "outputName": output_path.name,
@@ -260,7 +240,7 @@ def convert_msg_files(
                 file_name=record.source_path.name,
                 pipeline=pipeline_name,
                 success=True,
-                meta=_merge_event_meta(
+                meta=merge_event_meta(
                     event_meta,
                     {
                         "outputName": output_path.name,

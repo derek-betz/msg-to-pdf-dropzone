@@ -7,7 +7,6 @@ from pathlib import Path
 from time import perf_counter
 from tkinter import filedialog, messagebox, ttk
 from typing import Callable
-from uuid import uuid4
 
 from tkinterdnd2 import COPY, DND_ALL, TkinterDnD
 
@@ -18,6 +17,7 @@ from .task_events import (
     TaskEventSink,
     TaskMetaValue,
     TaskStage,
+    build_batch_meta_for_paths,
     default_task_id_for_path,
     emit_task_event,
 )
@@ -790,16 +790,7 @@ class MsgToPdfApp:
             )
 
     def _build_batch_meta_by_path(self, paths: list[Path]) -> dict[Path, dict[str, TaskMetaValue]]:
-        batch_id = f"msg-batch-{uuid4().hex[:12]}"
-        batch_size = len(paths)
-        return {
-            path.resolve(): {
-                "batchId": batch_id,
-                "batchSize": batch_size,
-                "batchIndex": index + 1,
-            }
-            for index, path in enumerate(paths)
-        }
+        return build_batch_meta_for_paths(paths)
 
     def _current_event_sink(self) -> TaskEventSink | None:
         theater_controller = getattr(self, "_theater_controller", None)
