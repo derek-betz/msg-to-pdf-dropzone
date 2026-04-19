@@ -23,7 +23,7 @@ import uvicorn
 
 from .converter import MAX_FILES_PER_BATCH, ConversionResult, convert_msg_files
 from .outlook_selection import extract_selected_outlook_messages
-from .task_events import TaskEvent, TaskMetaValue, default_task_id_for_path, emit_task_event
+from .task_events import TaskEvent, TaskMetaValue, build_batch_meta_for_paths, default_task_id_for_path, emit_task_event
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 WEB_UI_DIR = PACKAGE_ROOT / "web_ui"
@@ -255,16 +255,7 @@ def choose_output_directory() -> str | None:
 
 
 def build_batch_meta(items: list[StagedFile]) -> dict[Path, dict[str, TaskMetaValue]]:
-    batch_id = f"msg-batch-{uuid4().hex[:12]}"
-    batch_size = len(items)
-    return {
-        item.path.resolve(): {
-            "batchId": batch_id,
-            "batchSize": batch_size,
-            "batchIndex": index + 1,
-        }
-        for index, item in enumerate(items)
-    }
+    return build_batch_meta_for_paths([item.path for item in items])
 
 
 def summarize_result(result: ConversionResult) -> dict[str, object]:

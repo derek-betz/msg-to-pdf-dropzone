@@ -55,7 +55,7 @@ def test_convert_msg_files_uses_latest_thread_date_for_filename(monkeypatch, tmp
     def fake_parse(path: Path) -> EmailRecord:
         return records[path]
 
-    def fake_write(record: EmailRecord, output_path: Path) -> Path:
+    def fake_write(record: EmailRecord, output_path: Path, **_kwargs: object) -> Path:
         output_path.write_text(record.body, encoding="utf-8")
         return output_path
 
@@ -90,7 +90,7 @@ def test_convert_msg_files_populates_timing_lines(monkeypatch, tmp_path: Path) -
     def fake_parse(path: Path) -> EmailRecord:
         return record
 
-    def fake_write(_record: EmailRecord, output_path: Path, *, diagnostics=None) -> Path:
+    def fake_write(_record: EmailRecord, output_path: Path, *, diagnostics=None, **_kwargs: object) -> Path:
         output_path.write_text("ok", encoding="utf-8")
         if diagnostics is not None:
             diagnostics.pipeline = "fake_pipeline"
@@ -147,6 +147,7 @@ def test_convert_msg_files_emits_task_events(monkeypatch, tmp_path: Path) -> Non
         diagnostics=None,
         event_sink=None,
         task_id=None,
+        event_meta=None,
     ) -> Path:
         output_path.write_text("ok", encoding="utf-8")
         if diagnostics is not None:

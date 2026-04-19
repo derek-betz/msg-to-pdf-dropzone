@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import threading
 from typing import Literal, Protocol, TypeAlias
+from uuid import uuid4
 
 TaskType: TypeAlias = Literal["msg-to-pdf"]
 TaskStage: TypeAlias = Literal[
@@ -117,6 +118,31 @@ def emit_task_event(
     if sink is not None:
         sink(event)
     return event
+
+
+def merge_event_meta(
+    base_meta: Mapping[str, TaskMetaValue] | None,
+    extra_meta: Mapping[str, TaskMetaValue] | None,
+) -> dict[str, TaskMetaValue] | None:
+    merged: dict[str, TaskMetaValue] = {}
+    if base_meta:
+        merged.update(base_meta)
+    if extra_meta:
+        merged.update(extra_meta)
+    return merged or None
+
+
+def build_batch_meta_for_paths(paths: list[Path]) -> dict[Path, dict[str, TaskMetaValue]]:
+    batch_id = f"msg-batch-{uuid4().hex[:12]}"
+    batch_size = len(paths)
+    return {
+        path.resolve(): {
+            "batchId": batch_id,
+            "batchSize": batch_size,
+            "batchIndex": index + 1,
+        }
+        for index, path in enumerate(paths)
+    }
 
 
 def build_task_event_sink_from_env() -> TaskEventSink | None:
