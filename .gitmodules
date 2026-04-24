@@ -1,0 +1,4 @@
+[submodule ".standards"]
+	path = .standards
+	url = https://github.com/derek-betz/codex-skills.git
+	branch = main
