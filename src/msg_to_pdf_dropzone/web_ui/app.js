@@ -89,6 +89,7 @@ const STAGE_LABELS = {
 };
 
 const DEFAULT_DROP_COPY = "Supports Outlook drags and .msg files. Click to browse if you prefer.";
+const SERVER_DROP_COPY = "Supports .msg files. Click to browse if you prefer.";
 
 let queueProgressAnimationFrame = 0;
 
@@ -98,11 +99,17 @@ const state = {
   queueProgressByTaskId: {},
   pendingRemovalsById: {},
   outputDir: "",
+  outputDirLabel: "",
   activeConvertIds: [],
   celebratoryPulseTimer: 0,
   isBusy: false,
   explainerOpen: false,
   latestStatus: null,
+  serverMode: false,
+  capabilities: {
+    nativeOutputPicker: true,
+    outlookImport: true,
+  },
 };
 
 const elements = {
@@ -110,8 +117,10 @@ const elements = {
   convertButton: document.getElementById("convert-button"),
   dropzone: document.getElementById("dropzone"),
   dropzoneCopy: document.getElementById("dropzone-copy"),
+  appEyebrow: document.getElementById("app-eyebrow"),
   explainerBackdrop: document.getElementById("explainer-backdrop"),
   explainerClose: document.getElementById("explainer-close"),
+  explainerCopy: document.getElementById("explainer-copy"),
   explainerModal: document.getElementById("explainer-modal"),
   fileInput: document.getElementById("file-input"),
   helperRow: document.getElementById("helper-row"),
@@ -124,6 +133,8 @@ const elements = {
   simpleStatus: document.getElementById("simple-status"),
   statusDetail: document.getElementById("status-detail"),
   statusHeadline: document.getElementById("status-headline"),
+  topbarBody: document.getElementById("topbar-body"),
+  workflowBody: document.getElementById("workflow-body"),
 };
 
 function escapeHtml(value) {
@@ -133,6 +144,39 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+function defaultStatusDetail() {
+  if (state.outputDir) {
+    return `Server save folder: ${state.outputDir}`;
+  }
+  if (!state.capabilities.nativeOutputPicker) {
+    return "The hosted deployment expects a server-managed save location.";
+  }
+  return "You will choose a save folder after clicking Convert to PDF.";
+}
+
+function refreshHostingCopy() {
+  if (elements.appEyebrow) {
+    elements.appEyebrow.textContent = state.serverMode ? "Hosted PDF Converter" : "Local PDF Converter";
+  }
+  if (elements.topbarBody) {
+    elements.topbarBody.innerHTML = state.capabilities.outlookImport
+      ? "Drop Outlook emails or <code>.msg</code> files, then convert them to PDFs with the correct filename prefix."
+      : "Upload <code>.msg</code> files, then convert them to PDFs with the correct filename prefix.";
+  }
+  if (elements.workflowBody) {
+    elements.workflowBody.textContent = state.outputDir
+      ? `Upload .msg files or drag them into the page. Converted PDFs will be saved to ${state.outputDir}.`
+      : state.capabilities.outlookImport
+        ? "Drag from Outlook or click to browse. When you are ready, click Convert to PDF and choose where to save the files."
+        : "Click to browse for .msg files or drag them into the page, then convert them to PDFs.";
+  }
+  if (elements.explainerCopy) {
+    elements.explainerCopy.textContent = state.outputDir
+      ? `Drop one email or a whole batch, click Convert to PDF, and the app saves each PDF to ${state.outputDir} with the correct filename prefix.`
+      : "Drop one email or a whole batch, click Convert to PDF, choose a save folder, and the app creates a separate PDF for each message with the correct filename prefix.";
+  }
 }
 
 function lastPathSegment(value) {
@@ -350,13 +394,16 @@ function renderStatus() {
     return;
   }
   const hasVisibleStatus = Boolean(state.latestStatus?.headline || state.latestStatus?.detail);
-  elements.helperRow.hidden = !hasVisibleStatus;
-  if (!hasVisibleStatus) {
+  const headline = state.latestStatus?.headline || "Ready for files.";
+  const detail = state.latestStatus?.detail || defaultStatusDetail();
+  const tone = state.latestStatus?.tone || "neutral";
+  elements.helperRow.hidden = !(hasVisibleStatus || state.serverMode || state.outputDir || !state.capabilities.nativeOutputPicker);
+  if (elements.helperRow.hidden) {
     return;
   }
-  elements.simpleStatus.className = `simple-status is-${state.latestStatus.tone}`;
-  elements.statusHeadline.textContent = state.latestStatus.headline;
-  elements.statusDetail.textContent = state.latestStatus.detail;
+  elements.simpleStatus.className = `simple-status is-${tone}`;
+  elements.statusHeadline.textContent = headline;
+  elements.statusDetail.textContent = detail;
 }
 
 function renderExplainer() {
@@ -418,6 +465,8 @@ function updateActionState() {
     elements.convertButton.textContent = `Converting ${completedDuringRun}/${state.activeConvertIds.length}...`;
   } else if (!convertibleCount) {
     elements.convertButton.textContent = "Convert to PDF";
+  } else if (!outputReady && !state.capabilities.nativeOutputPicker) {
+    elements.convertButton.textContent = "Output Folder Required";
   } else if (!outputReady) {
     elements.convertButton.textContent = "Choose Save Folder";
   } else {
@@ -590,11 +639,30 @@ async function loadQueue() {
 }
 
 function detectUploadSourceFromDrop(dataTransfer) {
+  if (!state.capabilities.outlookImport) {
+    return "upload";
+  }
   const types = Array.from(dataTransfer?.types || []).map((value) => String(value).toLowerCase());
   if (types.some((value) => value.includes("filegroupdescriptor") || value.includes("outlook"))) {
     return "outlook";
   }
   return "upload";
+}
+
+async function loadSettings() {
+  const payload = await api("/api/settings");
+  state.maxFiles = payload.maxFiles || state.maxFiles;
+  state.serverMode = Boolean(payload.serverMode);
+  state.capabilities = {
+    nativeOutputPicker: Boolean(payload.capabilities?.nativeOutputPicker ?? true),
+    outlookImport: Boolean(payload.capabilities?.outlookImport ?? true),
+  };
+  state.outputDir = payload.defaultOutputDir || state.outputDir;
+  state.outputDirLabel = payload.defaultOutputDirLabel || state.outputDirLabel;
+  refreshHostingCopy();
+  setDropzoneCopy("default");
+  renderStatus();
+  updateActionState();
 }
 
 async function uploadFiles(files, { sourceHint = "upload" } = {}) {
@@ -621,12 +689,20 @@ async function uploadFiles(files, { sourceHint = "upload" } = {}) {
 async function chooseOutputFolder({ silentCancel = false } = {}) {
   const payload = await api("/api/choose-output-folder", { method: "POST" });
   if (!payload.outputDir) {
+    if (payload.disabled) {
+      if (!silentCancel) {
+        addStatus("Save folder is managed on the server.", payload.reason || defaultStatusDetail(), "neutral");
+      }
+      return false;
+    }
     if (!silentCancel) {
       addStatus("Save folder selection was cancelled.", "Choose a folder when you are ready to convert.", "neutral");
     }
     return false;
   }
   state.outputDir = payload.outputDir;
+  state.outputDirLabel = payload.outputDirLabel || "";
+  refreshHostingCopy();
   addStatus("Save folder selected.", state.outputDir, "success");
   updateActionState();
   return payload;
@@ -800,6 +876,10 @@ function setDropzoneCopy(mode) {
   if (!elements.dropzoneCopy) {
     return;
   }
+  if (!state.capabilities.outlookImport) {
+    elements.dropzoneCopy.textContent = SERVER_DROP_COPY;
+    return;
+  }
   if (mode === "outlook") {
     elements.dropzoneCopy.textContent = "Drop Outlook emails here.";
     return;
@@ -919,6 +999,7 @@ async function bootstrap() {
   installExplainerEvents();
   installActionEvents();
   connectEvents();
+  await loadSettings();
   await loadHealth();
   await loadQueue();
 }

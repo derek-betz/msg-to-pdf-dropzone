@@ -44,6 +44,16 @@ Useful flags:
 - `--host 127.0.0.1` to bind explicitly to localhost
 - `--no-browser` to skip auto-opening the browser tab
 
+## Hosted server mode
+
+For `WEB-SVR03`-style hosting, run the app as a loopback-bound background service and set these environment variables:
+
+- `MSG_TO_PDF_SERVER_MODE=1`
+- `MSG_TO_PDF_OUTPUT_DIR=<server managed folder>`
+- `MSG_TO_PDF_STAGING_DIR=<server writable staging folder>`
+
+In hosted mode, the app can use a fixed server-managed output directory and disable desktop-only features such as native folder selection and Outlook import.
+
 The browser UI is the primary app surface. It includes:
 
 - drag/drop `.msg` upload and manual file add

@@ -7,6 +7,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 import json
+import os
 from pathlib import Path
 import queue
 import tempfile
@@ -28,7 +29,47 @@ from .task_events import TaskEvent, TaskMetaValue, build_batch_meta_for_paths, d
 PACKAGE_ROOT = Path(__file__).resolve().parent
 WEB_UI_DIR = PACKAGE_ROOT / "web_ui"
 ASSET_DIR = PACKAGE_ROOT / "assets"
-STAGING_DIR = Path(tempfile.gettempdir()) / "msg-to-pdf-browser-staging"
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw_value = os.getenv(name, "").strip().lower()
+    if not raw_value:
+        return default
+    return raw_value in {"1", "true", "yes", "on"}
+
+
+def _env_path(name: str) -> Path | None:
+    raw_value = os.getenv(name, "").strip()
+    if not raw_value:
+        return None
+    return Path(raw_value).expanduser()
+
+
+@dataclass(frozen=True, slots=True)
+class HostingSettings:
+    server_mode: bool
+    default_output_dir: Path | None
+    disable_outlook_import: bool
+    disable_output_picker: bool
+
+
+def load_hosting_settings() -> HostingSettings:
+    server_mode = _env_flag("MSG_TO_PDF_SERVER_MODE", False)
+    default_output_dir = _env_path("MSG_TO_PDF_OUTPUT_DIR")
+    disable_outlook_import = _env_flag("MSG_TO_PDF_DISABLE_OUTLOOK_IMPORT", server_mode)
+    disable_output_picker = _env_flag(
+        "MSG_TO_PDF_DISABLE_OUTPUT_PICKER",
+        server_mode or default_output_dir is not None,
+    )
+    return HostingSettings(
+        server_mode=server_mode,
+        default_output_dir=default_output_dir,
+        disable_outlook_import=disable_outlook_import,
+        disable_output_picker=disable_output_picker,
+    )
+
+
+STAGING_DIR = _env_path("MSG_TO_PDF_STAGING_DIR") or (Path(tempfile.gettempdir()) / "msg-to-pdf-browser-staging")
 
 
 @dataclass(slots=True)
@@ -230,7 +271,7 @@ class RemoveRequest(BaseModel):
 
 class ConvertRequest(BaseModel):
     ids: list[str]
-    output_dir: str
+    output_dir: str | None = None
 
 
 class PreviewRequest(BaseModel):
@@ -256,6 +297,18 @@ def choose_output_directory() -> str | None:
 
 def build_batch_meta(items: list[StagedFile]) -> dict[Path, dict[str, TaskMetaValue]]:
     return build_batch_meta_for_paths([item.path for item in items])
+
+
+def _resolve_output_dir(request_output_dir: str | None, settings: HostingSettings) -> Path:
+    raw_value = (request_output_dir or "").strip()
+    if raw_value:
+        output_dir = Path(raw_value).expanduser()
+    elif settings.default_output_dir is not None:
+        output_dir = settings.default_output_dir
+    else:
+        raise HTTPException(status_code=400, detail="Choose an output folder before converting.")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return output_dir
 
 
 def summarize_result(result: ConversionResult) -> dict[str, object]:
@@ -310,6 +363,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title="MSG to PDF Browser")
     app.state.stage_store = StageStore()
     app.state.event_broker = EventBroker()
+    app.state.hosting_settings = load_hosting_settings()
 
     def publish_task_event(event: TaskEvent) -> None:
         app.state.stage_store.apply_task_event(event)
@@ -326,6 +380,23 @@ def create_app() -> FastAPI:
     async def health() -> dict[str, object]:
         stage_store: StageStore = app.state.stage_store
         return {"ok": True, "queuedCount": stage_store.count(), "maxFiles": MAX_FILES_PER_BATCH}
+
+    @app.get("/api/settings")
+    async def settings() -> dict[str, object]:
+        hosting: HostingSettings = app.state.hosting_settings
+        default_output_dir = hosting.default_output_dir
+        return {
+            "maxFiles": MAX_FILES_PER_BATCH,
+            "serverMode": hosting.server_mode,
+            "defaultOutputDir": str(default_output_dir) if default_output_dir else None,
+            "defaultOutputDirLabel": (
+                default_output_dir.name or str(default_output_dir) if default_output_dir else None
+            ),
+            "capabilities": {
+                "nativeOutputPicker": not hosting.disable_output_picker,
+                "outlookImport": not hosting.disable_outlook_import,
+            },
+        }
 
     @app.get("/api/queue")
     async def queue_snapshot() -> dict[str, object]:
@@ -364,6 +435,9 @@ def create_app() -> FastAPI:
 
     @app.post("/api/import-outlook")
     async def import_outlook() -> dict[str, object]:
+        hosting: HostingSettings = app.state.hosting_settings
+        if hosting.disable_outlook_import:
+            raise HTTPException(status_code=403, detail="Outlook import is disabled for this hosted deployment.")
         stage_store: StageStore = app.state.stage_store
         event_broker: EventBroker = app.state.event_broker
         staged_paths = await asyncio.to_thread(extract_selected_outlook_messages, stage_store.remaining_slots())
@@ -389,6 +463,20 @@ def create_app() -> FastAPI:
 
     @app.post("/api/choose-output-folder")
     async def choose_output_folder() -> JSONResponse:
+        hosting: HostingSettings = app.state.hosting_settings
+        if hosting.default_output_dir is not None:
+            output_dir = hosting.default_output_dir
+            output_dir.mkdir(parents=True, exist_ok=True)
+            return JSONResponse({"outputDir": str(output_dir), "outputDirLabel": output_dir.name or str(output_dir)}, status_code=200)
+        if hosting.disable_output_picker:
+            return JSONResponse(
+                {
+                    "outputDir": None,
+                    "disabled": True,
+                    "reason": "The hosted deployment uses a server-managed output location.",
+                },
+                status_code=200,
+            )
         selected = await asyncio.to_thread(choose_output_directory)
         if not selected:
             return JSONResponse({"outputDir": None}, status_code=200)
@@ -406,9 +494,9 @@ def create_app() -> FastAPI:
     async def convert(request: ConvertRequest) -> dict[str, object]:
         stage_store: StageStore = app.state.stage_store
         event_broker: EventBroker = app.state.event_broker
+        hosting: HostingSettings = app.state.hosting_settings
         items = stage_store.resolve_convertible_items(request.ids)
-        output_dir = Path(request.output_dir).expanduser()
-        output_dir.mkdir(parents=True, exist_ok=True)
+        output_dir = _resolve_output_dir(request.output_dir, hosting)
 
         batch_meta = build_batch_meta(items)
         for item in items:
@@ -463,8 +551,8 @@ def create_app() -> FastAPI:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the MSG to PDF browser app.")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--host", default=os.getenv("MSG_TO_PDF_HOST", "127.0.0.1"))
+    parser.add_argument("--port", type=int, default=int(os.getenv("MSG_TO_PDF_PORT", "8765")))
     parser.add_argument("--no-browser", action="store_true")
     args = parser.parse_args()
 
@@ -473,3 +561,7 @@ def main() -> None:
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
 
     uvicorn.run(create_app(), host=args.host, port=args.port, log_level="info")
+
+
+if __name__ == "__main__":
+    main()
