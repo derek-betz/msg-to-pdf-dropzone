@@ -45,12 +45,32 @@ def _env_path(name: str) -> Path | None:
     return Path(raw_value).expanduser()
 
 
+def _env_csv(name: str) -> tuple[str, ...]:
+    raw_value = os.getenv(name, "").strip()
+    if not raw_value:
+        return ()
+    return tuple(part.strip() for part in raw_value.split(",") if part.strip())
+
+
 @dataclass(frozen=True, slots=True)
 class HostingSettings:
     server_mode: bool
     default_output_dir: Path | None
     disable_outlook_import: bool
     disable_output_picker: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ServerSettings:
+    host: str
+    port: int
+    tls_certfile: Path | None
+    tls_keyfile: Path | None
+    tls_server_names: tuple[str, ...]
+
+    @property
+    def tls_enabled(self) -> bool:
+        return self.tls_certfile is not None and self.tls_keyfile is not None
 
 
 def load_hosting_settings() -> HostingSettings:
@@ -70,6 +90,41 @@ def load_hosting_settings() -> HostingSettings:
 
 
 STAGING_DIR = _env_path("MSG_TO_PDF_STAGING_DIR") or (Path(tempfile.gettempdir()) / "msg-to-pdf-browser-staging")
+
+
+def _is_loopback_host(host: str) -> bool:
+    normalized = (host or "").strip().lower()
+    return normalized in {"127.0.0.1", "localhost"}
+
+
+def load_server_settings(*, host: str | None = None, port: int | None = None) -> ServerSettings:
+    resolved_host = (host or os.getenv("MSG_TO_PDF_HOST", "127.0.0.1")).strip() or "127.0.0.1"
+    resolved_port = port or int(os.getenv("MSG_TO_PDF_PORT", "8765"))
+    return ServerSettings(
+        host=resolved_host,
+        port=resolved_port,
+        tls_certfile=_env_path("MSG_TO_PDF_TLS_CERTFILE"),
+        tls_keyfile=_env_path("MSG_TO_PDF_TLS_KEYFILE"),
+        tls_server_names=_env_csv("MSG_TO_PDF_SERVER_NAMES"),
+    )
+
+
+def validate_startup_contract(settings: ServerSettings) -> None:
+    if bool(settings.tls_certfile) != bool(settings.tls_keyfile):
+        raise SystemExit("msg-to-pdf-dropzone TLS startup requires both MSG_TO_PDF_TLS_CERTFILE and MSG_TO_PDF_TLS_KEYFILE.")
+    if settings.tls_enabled:
+        assert settings.tls_certfile is not None
+        assert settings.tls_keyfile is not None
+        if not settings.tls_certfile.exists():
+            raise SystemExit(f"msg-to-pdf-dropzone TLS cert file was not found: {settings.tls_certfile}")
+        if not settings.tls_keyfile.exists():
+            raise SystemExit(f"msg-to-pdf-dropzone TLS key file was not found: {settings.tls_keyfile}")
+        return
+    app_env = (os.getenv("APP_ENV", "production").strip() or "production").lower()
+    if app_env == "production" and not _is_loopback_host(settings.host):
+        raise SystemExit(
+            "msg-to-pdf-dropzone production startup requires loopback binding unless direct TLS is configured."
+        )
 
 
 @dataclass(slots=True)
@@ -556,11 +611,23 @@ def main() -> None:
     parser.add_argument("--no-browser", action="store_true")
     args = parser.parse_args()
 
-    url = f"http://{args.host}:{args.port}"
+    server_settings = load_server_settings(host=args.host, port=args.port)
+    validate_startup_contract(server_settings)
+
+    scheme = "https" if server_settings.tls_enabled else "http"
+    url = f"{scheme}://{server_settings.host}:{server_settings.port}"
     if not args.no_browser:
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
 
-    uvicorn.run(create_app(), host=args.host, port=args.port, log_level="info")
+    uvicorn.run(
+        create_app(),
+        host=server_settings.host,
+        port=server_settings.port,
+        log_level="info",
+        ssl_certfile=str(server_settings.tls_certfile) if server_settings.tls_certfile else None,
+        ssl_keyfile=str(server_settings.tls_keyfile) if server_settings.tls_keyfile else None,
+        server_header=False,
+    )
 
 
 if __name__ == "__main__":

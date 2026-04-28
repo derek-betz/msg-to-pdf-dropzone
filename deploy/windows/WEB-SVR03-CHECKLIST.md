@@ -16,6 +16,7 @@ Run this in an elevated PowerShell session:
 New-Item -ItemType Directory -Force -Path `
   'C:\Program Files\msg-to-pdf-dropzone', `
   'C:\ProgramData\msg-to-pdf-dropzone\config', `
+  'C:\ProgramData\SharedTls', `
   'C:\ProgramData\msg-to-pdf-dropzone\logs', `
   'C:\ProgramData\msg-to-pdf-dropzone\staging', `
   'C:\ProgramData\msg-to-pdf-dropzone\outputs\pdf'
@@ -30,18 +31,18 @@ py -3 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install .
 ```
 
-## 4. Install the WEB-SVR03 app env file
+## 4. Install the localhost proof app env file
 
-Copy the checked-in server values to the live config path:
+Copy the baseline localhost values to the live config path:
 
 ```powershell
 Copy-Item `
-  'C:\Program Files\msg-to-pdf-dropzone\deploy\windows\web-svr03.app.env' `
+  'C:\Program Files\msg-to-pdf-dropzone\deploy\windows\msg-to-pdf-dropzone.env.example' `
   'C:\ProgramData\msg-to-pdf-dropzone\config\app.env' `
   -Force
 ```
 
-The current values are:
+The localhost proof values are:
 
 ```env
 APP_ENV=production
@@ -72,7 +73,40 @@ Invoke-WebRequest 'http://127.0.0.1:8765/api/health'
 Invoke-WebRequest 'http://127.0.0.1:8765/api/settings'
 ```
 
-## 6. Register startup
+## 6. Switch to the final WEB-SVR03 direct-TLS config
+
+After the localhost proof passes, replace the config with the final `443` values:
+
+Make sure the shared wildcard cert and key are already present at:
+
+- `C:\ProgramData\SharedTls\hanson-inc-wildcard.crt`
+- `C:\ProgramData\SharedTls\hanson-inc-wildcard.key`
+
+```powershell
+Copy-Item `
+  'C:\Program Files\msg-to-pdf-dropzone\deploy\windows\web-svr03.app.env' `
+  'C:\ProgramData\msg-to-pdf-dropzone\config\app.env' `
+  -Force
+```
+
+The final direct-TLS values are:
+
+```env
+APP_ENV=production
+MSG_TO_PDF_HOST=10.1.13.203
+MSG_TO_PDF_PORT=443
+MSG_TO_PDF_SERVER_MODE=1
+MSG_TO_PDF_STAGING_DIR=C:\ProgramData\msg-to-pdf-dropzone\staging
+MSG_TO_PDF_OUTPUT_DIR=C:\ProgramData\msg-to-pdf-dropzone\outputs\pdf
+MSG_TO_PDF_DISABLE_OUTLOOK_IMPORT=1
+MSG_TO_PDF_DISABLE_OUTPUT_PICKER=1
+MSG_TO_PDF_RENDER_STRATEGY=fast
+MSG_TO_PDF_TLS_CERTFILE=C:\ProgramData\SharedTls\hanson-inc-wildcard.crt
+MSG_TO_PDF_TLS_KEYFILE=C:\ProgramData\SharedTls\hanson-inc-wildcard.key
+MSG_TO_PDF_SERVER_NAMES=emailpdf.hanson-inc.com
+```
+
+## 7. Register startup
 
 After the localhost proof passes:
 
@@ -86,9 +120,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File `
 
 If IT wants a specific service account, rerun the same command with `-TaskUser` and `-TaskPassword`.
 
-## 7. Final server-side validation
+## 8. Final server-side validation
 
 - Confirm the scheduled task starts cleanly after a reboot or manual run.
 - Confirm the app log is being written to `C:\ProgramData\msg-to-pdf-dropzone\logs\msg-to-pdf-dropzone.log`.
-- Confirm the IIS or reverse-proxy binding for `emailpdf.hanson-inc.com` points to `127.0.0.1:8765`.
 - Validate `https://emailpdf.hanson-inc.com`.

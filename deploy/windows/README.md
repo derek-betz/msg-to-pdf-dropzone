@@ -7,6 +7,7 @@ Use this folder for the `WEB-SVR03` deployment shape that mirrors `CostEstimateG
 - App code: `C:\Program Files\msg-to-pdf-dropzone`
 - Virtualenv: `C:\Program Files\msg-to-pdf-dropzone\.venv`
 - Config: `C:\ProgramData\msg-to-pdf-dropzone\config\app.env`
+- Shared TLS dir recommended: `C:\ProgramData\SharedTls`
 - Logs: `C:\ProgramData\msg-to-pdf-dropzone\logs\`
 - Staging: `C:\ProgramData\msg-to-pdf-dropzone\staging\`
 - Output root: `C:\ProgramData\msg-to-pdf-dropzone\outputs\pdf\`
@@ -21,9 +22,11 @@ Use this folder for the `WEB-SVR03` deployment shape that mirrors `CostEstimateG
 
 ## Serving model
 
-- App server: `uvicorn` on `127.0.0.1:8765`
+- Local bring-up: `uvicorn` on `127.0.0.1:8765`
+- Final internal URL: direct TLS on `10.1.13.203:443` using the shared wildcard cert
 - Final internal URL: `https://emailpdf.hanson-inc.com`
 - Writable runtime data: `C:\ProgramData\msg-to-pdf-dropzone`
+- Recommended shared wildcard cert path: `C:\ProgramData\SharedTls\hanson-inc-wildcard.crt` and `.key`
 
 ## Hosted-mode notes
 
@@ -36,8 +39,9 @@ Use this folder for the `WEB-SVR03` deployment shape that mirrors `CostEstimateG
 1. Copy the repo to `C:\Program Files\msg-to-pdf-dropzone`.
 2. Build the virtualenv and install dependencies.
 3. Create the runtime directories under `C:\ProgramData\msg-to-pdf-dropzone`.
-4. Copy `web-svr03.app.env` to the real config path as `app.env`.
-5. Run `run-msg-to-pdf-dropzone.ps1` manually on the server for the localhost proof.
-6. Validate `http://127.0.0.1:8765/api/health`.
-7. Add the web-server binding for `emailpdf.hanson-inc.com` on `WEB-SVR03`.
-8. Register or update the scheduled task and validate the real URL.
+4. Copy `msg-to-pdf-dropzone.env.example` to the real config path for the localhost proof.
+5. Run `run-msg-to-pdf-dropzone.ps1` manually on the server and validate `http://127.0.0.1:8765/api/health`.
+6. Place the wildcard cert and key in the shared TLS directory or update the final env file to match IT's chosen shared path.
+7. Replace the localhost proof config with `web-svr03.app.env` for final direct TLS on `443`.
+8. Register or update the scheduled task.
+9. Validate `https://emailpdf.hanson-inc.com`.
