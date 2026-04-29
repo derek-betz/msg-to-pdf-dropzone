@@ -25,6 +25,18 @@ def test_health_and_queue_snapshot(monkeypatch, tmp_path: Path) -> None:
     assert queue.json()["items"] == []
 
 
+def test_index_includes_feedback_modal(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("msg_to_pdf_dropzone.web_server.STAGING_DIR", tmp_path / "staging")
+    client = TestClient(create_app())
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert "Send Feedback" in response.text
+    assert 'id="feedback-modal"' in response.text
+    assert 'id="feedback-category"' in response.text
+
+
 def test_upload_and_convert_flow(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr("msg_to_pdf_dropzone.web_server.STAGING_DIR", tmp_path / "staging")
     converted_path = tmp_path / "output" / "2026-04-04_Sample.pdf"

@@ -104,6 +104,7 @@ const state = {
   celebratoryPulseTimer: 0,
   isBusy: false,
   explainerOpen: false,
+  feedbackOpen: false,
   latestStatus: null,
   serverMode: false,
   capabilities: {
@@ -123,6 +124,15 @@ const elements = {
   explainerCopy: document.getElementById("explainer-copy"),
   explainerModal: document.getElementById("explainer-modal"),
   fileInput: document.getElementById("file-input"),
+  feedbackBackdrop: document.getElementById("feedback-backdrop"),
+  feedbackButton: document.getElementById("feedback-button"),
+  feedbackCategory: document.getElementById("feedback-category"),
+  feedbackClose: document.getElementById("feedback-close"),
+  feedbackHelpful: document.getElementById("feedback-helpful"),
+  feedbackImprove: document.getElementById("feedback-improve"),
+  feedbackMessage: document.getElementById("feedback-message"),
+  feedbackModal: document.getElementById("feedback-modal"),
+  feedbackSend: document.getElementById("feedback-send"),
   helperRow: document.getElementById("helper-row"),
   howItWorksButton: document.getElementById("how-it-works-button"),
   queueCountBadge: document.getElementById("queue-count-badge"),
@@ -428,6 +438,94 @@ function closeExplainer() {
   state.explainerOpen = false;
   renderExplainer();
   elements.howItWorksButton?.focus();
+}
+
+function renderFeedbackModal() {
+  if (!elements.feedbackModal || !elements.feedbackBackdrop || !elements.feedbackButton) {
+    return;
+  }
+
+  const isOpen = state.feedbackOpen;
+  elements.feedbackModal.hidden = !isOpen;
+  elements.feedbackBackdrop.hidden = !isOpen;
+  elements.feedbackButton.setAttribute("aria-expanded", isOpen ? "true" : "false");
+  document.body.classList.toggle("feedback-open", isOpen);
+}
+
+function openFeedback() {
+  state.feedbackOpen = true;
+  renderFeedbackModal();
+  elements.feedbackImprove?.focus();
+}
+
+function closeFeedback() {
+  state.feedbackOpen = false;
+  renderFeedbackModal();
+  elements.feedbackButton?.focus();
+}
+
+function buildFeedbackContext() {
+  return {
+    appName: "msg-to-pdf-dropzone",
+    url: window.location.href,
+    path: window.location.pathname,
+    queuedCount: state.items.length,
+    activeQueueCount: state.items.filter((item) => item.stage !== "complete").length,
+    completedCount: state.items.filter((item) => item.stage === "complete").length,
+    failedCount: state.items.filter((item) => item.stage === "failed").length,
+    serverMode: state.serverMode,
+    outputDir: state.outputDir || null,
+    isBusy: state.isBusy,
+    activeConvertIds: state.activeConvertIds,
+    capabilities: state.capabilities,
+    userAgent: navigator.userAgent,
+  };
+}
+
+async function submitFeedback() {
+  const category = elements.feedbackCategory?.value || "other";
+  const improve = elements.feedbackImprove?.value.trim() || "";
+  const helpful = elements.feedbackHelpful?.value.trim() || "";
+  const message = elements.feedbackMessage?.value.trim() || "";
+  if (!improve && !helpful && !message) {
+    addStatus("Add a note before sending feedback.", "", "error");
+    return;
+  }
+
+  if (elements.feedbackSend) {
+    elements.feedbackSend.disabled = true;
+    elements.feedbackSend.textContent = "Sending...";
+  }
+  try {
+    const data = await api("/api/feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        category,
+        improve,
+        helpful,
+        message,
+        context: buildFeedbackContext(),
+      }),
+    });
+    if (elements.feedbackCategory) elements.feedbackCategory.value = "other";
+    if (elements.feedbackImprove) elements.feedbackImprove.value = "";
+    if (elements.feedbackHelpful) elements.feedbackHelpful.value = "";
+    if (elements.feedbackMessage) elements.feedbackMessage.value = "";
+    closeFeedback();
+    if (data?.emailSent === false) {
+      addStatus("Feedback saved.", "Email delivery needs follow-up, but the note is stored locally.", "success");
+    } else {
+      addStatus("Feedback sent.", "Thank you for helping improve the converter.", "success");
+    }
+  } catch (error) {
+    addStatus("Feedback could not be sent.", error.message, "error");
+  } finally {
+    if (elements.feedbackSend) {
+      elements.feedbackSend.disabled = false;
+      elements.feedbackSend.textContent = "Send feedback";
+    }
+  }
 }
 
 function celebrateQueueCompletion() {
@@ -945,7 +1043,23 @@ function installExplainerEvents() {
     if (event.key === "Escape" && state.explainerOpen) {
       closeExplainer();
     }
+    if (event.key === "Escape" && state.feedbackOpen) {
+      closeFeedback();
+    }
   });
+}
+
+function installFeedbackEvents() {
+  elements.feedbackButton?.addEventListener("click", () => {
+    if (state.feedbackOpen) {
+      closeFeedback();
+      return;
+    }
+    openFeedback();
+  });
+  elements.feedbackClose?.addEventListener("click", closeFeedback);
+  elements.feedbackBackdrop?.addEventListener("click", closeFeedback);
+  elements.feedbackSend?.addEventListener("click", submitFeedback);
 }
 
 function connectEvents() {
@@ -992,11 +1106,13 @@ function installActionEvents() {
 async function bootstrap() {
   renderStatus();
   renderExplainer();
+  renderFeedbackModal();
   setDropzoneCopy("default");
   renderQueue();
   installQueueEvents();
   installDropzoneEvents();
   installExplainerEvents();
+  installFeedbackEvents();
   installActionEvents();
   connectEvents();
   await loadSettings();

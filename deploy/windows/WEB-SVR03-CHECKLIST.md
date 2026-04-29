@@ -17,9 +17,11 @@ New-Item -ItemType Directory -Force -Path `
   'C:\Program Files\msg-to-pdf-dropzone', `
   'C:\ProgramData\msg-to-pdf-dropzone\config', `
   'C:\ProgramData\SharedTls', `
+  'C:\ProgramData\SharedFeedback', `
   'C:\ProgramData\msg-to-pdf-dropzone\logs', `
   'C:\ProgramData\msg-to-pdf-dropzone\staging', `
-  'C:\ProgramData\msg-to-pdf-dropzone\outputs\pdf'
+  'C:\ProgramData\msg-to-pdf-dropzone\outputs\pdf', `
+  'C:\ProgramData\msg-to-pdf-dropzone\outputs\feedback'
 ```
 
 ## 3. Build the virtualenv and install the app
@@ -104,6 +106,8 @@ MSG_TO_PDF_RENDER_STRATEGY=fast
 MSG_TO_PDF_TLS_CERTFILE=C:\ProgramData\SharedTls\hanson-inc-wildcard.crt
 MSG_TO_PDF_TLS_KEYFILE=C:\ProgramData\SharedTls\hanson-inc-wildcard.key
 MSG_TO_PDF_SERVER_NAMES=emailpdf.hanson-inc.com
+# Optional, recommended when feedback email is enabled:
+# MSG_TO_PDF_FEEDBACK_CONFIG_PATH=C:\ProgramData\SharedFeedback\feedback-email.json
 ```
 
 ## 7. Register startup
@@ -125,3 +129,4 @@ If IT wants a specific service account, rerun the same command with `-TaskUser` 
 - Confirm the scheduled task starts cleanly after a reboot or manual run.
 - Confirm the app log is being written to `C:\ProgramData\msg-to-pdf-dropzone\logs\msg-to-pdf-dropzone.log`.
 - Validate `https://emailpdf.hanson-inc.com`.
+- Submit a feedback test and confirm it is saved under `C:\ProgramData\msg-to-pdf-dropzone\outputs\feedback\`.

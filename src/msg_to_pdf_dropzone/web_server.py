@@ -5,7 +5,9 @@ import asyncio
 import atexit
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
+import hmac
+import html
 import json
 import os
 from pathlib import Path
@@ -16,13 +18,14 @@ from typing import Any
 from uuid import uuid4
 import webbrowser
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import uvicorn
 
 from .converter import MAX_FILES_PER_BATCH, ConversionResult, convert_msg_files
+from .feedback import list_feedback_entries, record_feedback, send_feedback_email
 from .outlook_selection import extract_selected_outlook_messages
 from .task_events import TaskEvent, TaskMetaValue, build_batch_meta_for_paths, default_task_id_for_path, emit_task_event
 
@@ -333,6 +336,14 @@ class PreviewRequest(BaseModel):
     pipeline: str = "outlook_edge"
 
 
+class FeedbackRequest(BaseModel):
+    category: str = "other"
+    improve: str = ""
+    helpful: str = ""
+    message: str = ""
+    context: dict[str, Any] | None = None
+
+
 def choose_output_directory() -> str | None:
     try:
         import tkinter as tk
@@ -375,6 +386,99 @@ def summarize_result(result: ConversionResult) -> dict[str, object]:
         "totalSeconds": result.total_seconds,
         "timingLines": list(result.timing_lines),
     }
+
+
+def _feedback_output_dir(hosting: HostingSettings) -> Path:
+    if hosting.default_output_dir is not None:
+        return hosting.default_output_dir.parent / "feedback"
+    return Path(os.getenv("MSG_TO_PDF_FEEDBACK_DIR", "") or (PACKAGE_ROOT.parent.parent / "outputs" / "feedback")).expanduser()
+
+
+def _feedback_read_allowed(token: str | None) -> bool:
+    expected_token = (
+        os.getenv("MSG_TO_PDF_FEEDBACK_READ_TOKEN")
+        or os.getenv("FEEDBACK_READ_TOKEN")
+        or ""
+    ).strip()
+    provided_token = (token or "").strip()
+    if not expected_token or not provided_token:
+        return False
+    return hmac.compare_digest(provided_token, expected_token)
+
+
+def _feedback_request_context(
+    request: Request,
+    payload: FeedbackRequest,
+    *,
+    hosting: HostingSettings,
+    stage_store: StageStore,
+) -> dict[str, Any]:
+    default_output_dir = hosting.default_output_dir
+    context: dict[str, Any] = {
+        "appName": "msg-to-pdf-dropzone",
+        "url": str(request.url),
+        "path": request.url.path,
+        "referrer": request.headers.get("Referer", ""),
+        "host": request.headers.get("Host", ""),
+        "serverMode": hosting.server_mode,
+        "defaultOutputDir": str(default_output_dir) if default_output_dir else None,
+        "queuedCount": stage_store.count(),
+        "activeQueueCount": stage_store.active_count(),
+        "disableOutlookImport": hosting.disable_outlook_import,
+        "disableOutputPicker": hosting.disable_output_picker,
+    }
+    if payload.context:
+        context.update(payload.context)
+    return context
+
+
+def _render_feedback_admin_page(items: list[dict[str, object]]) -> str:
+    rows = []
+    for item in items:
+        context_text = _json_dumps_for_html(item.get("context") or {})
+        rows.append(
+            "<tr>"
+            f"<td>{html.escape(str(item.get('timestamp') or ''))}</td>"
+            f"<td>{html.escape(str(item.get('category') or ''))}</td>"
+            f"<td>{html.escape(str(item.get('improve') or ''))}</td>"
+            f"<td>{html.escape(str(item.get('helpful') or ''))}</td>"
+            f"<td>{html.escape(str(item.get('message') or ''))}</td>"
+            f"<td><pre>{html.escape(context_text)}</pre></td>"
+            "</tr>"
+        )
+    body = "\n".join(rows) or '<tr><td colspan="6">No feedback entries found.</td></tr>'
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>msg-to-pdf-dropzone Feedback</title>
+  <style>
+    body {{ font-family: Segoe UI, sans-serif; margin: 24px; color: #172335; background: #f5efe0; }}
+    table {{ border-collapse: collapse; width: 100%; background: #fffaf0; }}
+    th, td {{ border: 1px solid #d8cdb7; padding: 8px; text-align: left; vertical-align: top; }}
+    th {{ background: #e9dcc4; }}
+    pre {{ margin: 0; white-space: pre-wrap; max-width: 420px; }}
+  </style>
+</head>
+<body>
+  <h1>msg-to-pdf-dropzone Feedback</h1>
+  <p>Showing latest {len(items)} saved feedback entr{'y' if len(items) == 1 else 'ies'}.</p>
+  <table>
+    <thead>
+      <tr><th>Submitted</th><th>Category</th><th>Could Be Better</th><th>Helpful</th><th>Notes</th><th>Context</th></tr>
+    </thead>
+    <tbody>{body}</tbody>
+  </table>
+</body>
+</html>"""
+
+
+def _json_dumps_for_html(value: object) -> str:
+    try:
+        return json.dumps(value, indent=2, ensure_ascii=False, default=str)
+    except TypeError:
+        return str(value)
 
 
 async def publish_preview_sequence(event_broker: EventBroker, *, pipeline: str) -> None:
@@ -452,6 +556,68 @@ def create_app() -> FastAPI:
                 "outlookImport": not hosting.disable_outlook_import,
             },
         }
+
+    @app.get("/api/feedback")
+    async def get_feedback(
+        limit: int = 100,
+        offset: int = 0,
+        source: str | None = None,
+        q: str | None = None,
+        token: str | None = None,
+    ) -> dict[str, object]:
+        if not _feedback_read_allowed(token):
+            raise HTTPException(status_code=403, detail="Feedback database access is restricted.")
+        items = list_feedback_entries(
+            output_dir=_feedback_output_dir(app.state.hosting_settings),
+            limit=limit,
+            offset=offset,
+            source=source,
+            query=q,
+        )
+        return {"items": items, "count": len(items), "limit": limit, "offset": offset}
+
+    @app.get("/feedback")
+    @app.get("/feedback/admin")
+    async def feedback_admin(
+        limit: int = 100,
+        offset: int = 0,
+        token: str | None = None,
+    ) -> HTMLResponse:
+        if not _feedback_read_allowed(token):
+            return HTMLResponse("Feedback database access is restricted.", status_code=403)
+        items = list_feedback_entries(
+            output_dir=_feedback_output_dir(app.state.hosting_settings),
+            limit=limit,
+            offset=offset,
+        )
+        return HTMLResponse(_render_feedback_admin_page(items))
+
+    @app.post("/api/feedback")
+    async def submit_feedback(request: Request, feedback: FeedbackRequest) -> dict[str, object]:
+        improve = feedback.improve.strip()
+        helpful = feedback.helpful.strip()
+        message = feedback.message.strip()
+        category = feedback.category.strip() or "other"
+        if not improve and not helpful and not message:
+            raise HTTPException(status_code=400, detail="Feedback response is required.")
+        feedback_payload = {
+            "source": "web",
+            "category": category,
+            "improve": improve,
+            "helpful": helpful,
+            "message": message,
+            "user_agent": request.headers.get("User-Agent", ""),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "context": _feedback_request_context(
+                request,
+                feedback,
+                hosting=app.state.hosting_settings,
+                stage_store=app.state.stage_store,
+            ),
+        }
+        record_feedback(feedback_payload, output_dir=_feedback_output_dir(app.state.hosting_settings))
+        email_sent = send_feedback_email(feedback_payload)
+        return {"status": "ok", "emailSent": email_sent}
 
     @app.get("/api/queue")
     async def queue_snapshot() -> dict[str, object]:

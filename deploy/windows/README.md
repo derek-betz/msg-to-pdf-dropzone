@@ -11,6 +11,8 @@ Use this folder for the `WEB-SVR03` deployment shape that mirrors `CostEstimateG
 - Logs: `C:\ProgramData\msg-to-pdf-dropzone\logs\`
 - Staging: `C:\ProgramData\msg-to-pdf-dropzone\staging\`
 - Output root: `C:\ProgramData\msg-to-pdf-dropzone\outputs\pdf\`
+- Feedback records: `C:\ProgramData\msg-to-pdf-dropzone\outputs\feedback\`
+- Shared feedback email config recommended: `C:\ProgramData\SharedFeedback\feedback-email.json`
 
 ## Files
 
@@ -27,6 +29,7 @@ Use this folder for the `WEB-SVR03` deployment shape that mirrors `CostEstimateG
 - Final internal URL: `https://emailpdf.hanson-inc.com`
 - Writable runtime data: `C:\ProgramData\msg-to-pdf-dropzone`
 - Recommended shared wildcard cert path: `C:\ProgramData\SharedTls\hanson-inc-wildcard.crt` and `.key`
+- Feedback email uses `MSG_TO_PDF_FEEDBACK_CONFIG_PATH` or the `MSG_TO_PDF_FEEDBACK_SMTP_*` environment variables.
 
 ## Hosted-mode notes
 
