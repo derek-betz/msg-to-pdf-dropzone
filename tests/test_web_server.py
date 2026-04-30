@@ -179,6 +179,24 @@ def test_upload_recreates_missing_staging_dir(monkeypatch, tmp_path: Path) -> No
     assert staging_dir.exists()
 
 
+def test_open_output_folder_endpoint_invokes_helper(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("msg_to_pdf_dropzone.web_server.STAGING_DIR", tmp_path / "staging")
+    opened: list[str] = []
+
+    def fake_open_output_directory(path_value: str) -> bool:
+        opened.append(path_value)
+        return True
+
+    monkeypatch.setattr("msg_to_pdf_dropzone.web_server.open_output_directory", fake_open_output_directory)
+    client = TestClient(create_app())
+
+    response = client.post("/api/open-output-folder", json={"output_dir": str(tmp_path)})
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert opened == [str(tmp_path)]
+
+
 def test_publish_preview_sequence_emits_stage_events(monkeypatch) -> None:
     async def fake_sleep(_seconds: float) -> None:
         return None

@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import subprocess
 import tempfile
 import threading
 from typing import Any
@@ -332,6 +333,10 @@ class ConvertRequest(BaseModel):
     output_dir: str | None = None
 
 
+class OpenOutputFolderRequest(BaseModel):
+    output_dir: str | None = None
+
+
 class PreviewRequest(BaseModel):
     pipeline: str = "outlook_edge"
 
@@ -359,6 +364,23 @@ def choose_output_directory() -> str | None:
     finally:
         root.destroy()
     return selected or None
+
+
+def open_output_directory(path_value: str) -> bool:
+    target = Path(path_value).expanduser()
+    if not target.exists() or not target.is_dir():
+        return False
+
+    startfile = getattr(os, "startfile", None)
+    if callable(startfile):
+        startfile(str(target))
+        return True
+
+    try:
+        subprocess.Popen(["xdg-open", str(target)])
+    except OSError:
+        return False
+    return True
 
 
 def build_batch_meta(items: list[StagedFile]) -> dict[Path, dict[str, TaskMetaValue]]:
@@ -703,6 +725,16 @@ def create_app() -> FastAPI:
             return JSONResponse({"outputDir": None}, status_code=200)
         output_dir = Path(selected).expanduser()
         return JSONResponse({"outputDir": str(output_dir), "outputDirLabel": output_dir.name or str(output_dir)})
+
+    @app.post("/api/open-output-folder")
+    async def open_output_folder(request: OpenOutputFolderRequest) -> dict[str, object]:
+        output_dir = (request.output_dir or "").strip()
+        if not output_dir:
+            raise HTTPException(status_code=400, detail="Choose an output folder before opening it.")
+        opened = await asyncio.to_thread(open_output_directory, output_dir)
+        if not opened:
+            raise HTTPException(status_code=404, detail="The selected output folder is unavailable.")
+        return {"ok": True, "outputDir": output_dir}
 
     @app.post("/api/preview-mailroom")
     async def preview_mailroom(request: PreviewRequest) -> dict[str, object]:
