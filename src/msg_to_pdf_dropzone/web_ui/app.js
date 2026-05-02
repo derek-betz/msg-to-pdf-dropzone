@@ -1,3 +1,5 @@
+import { createDropzoneController } from "./dropzone_controller.js";
+
 const QUEUE_STAGE_PROGRESS = {
   output_folder_selected: {
     label: "Starting",
@@ -100,6 +102,7 @@ const TIMELINE_STAGES = [
 ];
 
 let queueProgressAnimationFrame = 0;
+let dropzoneController = null;
 
 const state = {
   maxFiles: 25,
@@ -109,8 +112,12 @@ const state = {
   outputDir: "",
   outputDirLabel: "",
   recentDestinations: [],
+  recentlyQueuedIds: new Set(),
   activeConvertIds: [],
   celebratoryPulseTimer: 0,
+  dropFeedbackTimer: 0,
+  queueHandoffTimer: 0,
+  newRowsTimer: 0,
   isBusy: false,
   tutorialOpen: false,
   feedbackOpen: false,
@@ -131,6 +138,9 @@ const elements = {
   clearButton: document.getElementById("clear-button"),
   convertButton: document.getElementById("convert-button"),
   destinationInlineValue: document.getElementById("destination-inline-value"),
+  dropFeedbackDetail: document.getElementById("drop-feedback-detail"),
+  dropFeedbackTitle: document.getElementById("drop-feedback-title"),
+  dropRippleCanvas: document.getElementById("drop-ripple-canvas"),
   dropzone: document.getElementById("dropzone"),
   dropzoneCopy: document.getElementById("dropzone-copy"),
   appEyebrow: document.getElementById("app-eyebrow"),
@@ -222,7 +232,7 @@ function defaultStatusDetail() {
   if (!state.capabilities.nativeOutputPicker) {
     return "The hosted deployment expects a server-managed save location.";
   }
-  return "Choose a save folder, then start the batch when you are ready.";
+  return "Click Convert to PDF and choose the destination folder when prompted.";
 }
 
 function formatDestinationLabel() {
@@ -254,6 +264,18 @@ function lastPathSegment(value) {
   return parts[parts.length - 1] || value || "";
 }
 
+function parentPath(value) {
+  const rawValue = String(value || "").trim();
+  if (!rawValue) {
+    return "";
+  }
+  const lastSeparator = Math.max(rawValue.lastIndexOf("\\"), rawValue.lastIndexOf("/"));
+  if (lastSeparator <= 0) {
+    return "";
+  }
+  return rawValue.slice(0, lastSeparator);
+}
+
 function formatSource(source) {
   if (source === "outlook") {
     return "Outlook drag";
@@ -268,6 +290,28 @@ function formatQueuePercent(progress) {
   return `${Math.round(progress?.percent || 0)}%`;
 }
 
+function formatByteSize(bytes) {
+  const value = Number(bytes || 0);
+  if (!Number.isFinite(value) || value <= 0) {
+    return "";
+  }
+  if (value >= 1024 * 1024) {
+    return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  if (value >= 1024) {
+    return `${Math.round(value / 1024)} KB`;
+  }
+  return `${value} B`;
+}
+
+function formatTimelineTime(value) {
+  const date = value ? new Date(value) : new Date();
+  if (Number.isNaN(date.getTime())) {
+    return "Now";
+  }
+  return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
 function queueStageLabel(stage) {
   return STAGE_LABELS[stage] || "Queued";
 }
@@ -280,6 +324,17 @@ function queueDocumentLabel(item) {
     return "ERR";
   }
   return "MSG";
+}
+
+function queueOutputName(item) {
+  if (item.outputPath) {
+    return lastPathSegment(item.outputPath);
+  }
+  if (item.outputName) {
+    return item.outputName;
+  }
+  const baseName = String(item.name || "").replace(/\.msg$/i, "");
+  return `${baseName}.pdf`;
 }
 
 function queueVisualState(item, progress) {
@@ -313,6 +368,9 @@ function outputPreviewLabel(item) {
   if (item.outputPath) {
     return lastPathSegment(item.outputPath);
   }
+  if (item.outputName) {
+    return item.outputName;
+  }
   const baseName = String(item.name || "").replace(/\.msg$/i, "");
   return `${baseName}.pdf with date prefix`;
 }
@@ -339,6 +397,10 @@ function buildQueueProgressStateFromSnapshot(item) {
 
 function queueProgressStateForItem(item) {
   return state.queueProgressByTaskId[item.taskId] || buildQueueProgressStateFromSnapshot(item);
+}
+
+function delay(milliseconds) {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }
 
 function summarizeBatch() {
@@ -385,7 +447,7 @@ function renderOperations() {
     ? formatDestinationLabel()
     : !state.capabilities.nativeOutputPicker
       ? "Server-managed output folder."
-      : "Choose a save folder before conversion.";
+      : "Choose a destination when you convert.";
 
   if (elements.historyStrip && elements.historyList) {
     const visibleDestinations = state.recentDestinations.filter((value) => value !== state.outputDir);
@@ -414,7 +476,7 @@ function renderOperations() {
       elements.modeBannerTitle.textContent = "Batch is staged";
       elements.modeBannerDetail.textContent = destinationKnown
         ? `Destination confirmed. ${summary.ready} file(s) are ready to convert.`
-        : `${summary.ready} file(s) are queued. Choose a destination and start the batch.`;
+        : `${summary.ready} file(s) are queued. Click Convert to choose a destination and start the batch.`;
     }
   }
 
@@ -438,6 +500,16 @@ function renderOperations() {
         elements.resultDetail.textContent = "Most files were converted, but some still need review or retry.";
       }
     }
+  }
+
+  if (elements.openOutputFolderButton) {
+    const shouldShowOpenOutput = destinationKnown && !isProcessing && summary.complete > 0;
+    elements.openOutputFolderButton.hidden = !shouldShowOpenOutput;
+    elements.openOutputFolderButton.disabled = !shouldShowOpenOutput;
+  }
+
+  if (elements.convertButton) {
+    elements.convertButton.hidden = isComplete;
   }
 
   if (!summary.queued) {
@@ -467,7 +539,7 @@ function renderOperations() {
     elements.batchProgressHeadline.textContent = `${summary.ready} file(s) ready to convert`;
     elements.batchProgressDetail.textContent = destinationKnown
       ? `Destination confirmed: ${formatDestinationLabel()}`
-      : "Choose a destination, then start the batch.";
+      : "Click Convert to choose a destination and start the batch.";
     elements.batchProgressFill.style.width = summary.queued ? "12%" : "0%";
   }
 
@@ -498,6 +570,7 @@ function renderOperations() {
   if (!state.items.length) {
     elements.timelineList.innerHTML = `
       <div class="timeline-row is-active">
+        <span class="timeline-time">Now</span>
         <span class="timeline-dot"></span>
         <span class="timeline-copy">Queue idle. Waiting for files.</span>
       </div>
@@ -505,16 +578,29 @@ function renderOperations() {
     return;
   }
 
-  elements.timelineList.innerHTML = TIMELINE_STAGES.map((entry) => {
-    const tone = activeStages.has(entry.key)
-      ? "is-active"
-      : completedStages.has(entry.key)
-        ? "is-complete"
-        : "";
+  const recentItems = [...state.items].slice(-6).reverse();
+  elements.timelineList.innerHTML = recentItems.map((item) => {
+    const progress = queueProgressStateForItem(item);
+    const visual = queueVisualState(item, progress);
+    const tone = visual.tone === "complete"
+      ? "is-complete"
+      : visual.tone === "failed"
+        ? "is-failed"
+        : progress?.active
+          ? "is-active"
+          : "";
+    const detail = item.stage === "complete"
+      ? "Converted successfully"
+      : item.stage === "failed"
+        ? item.error || "Failed to convert"
+        : progress?.active
+          ? `${progress.label || queueStageLabel(item.stage)} ${formatQueuePercent(progress)}`
+          : "Queued and ready";
     return `
       <div class="timeline-row ${tone}">
+        <span class="timeline-time">${escapeHtml(formatTimelineTime(item.createdAt))}</span>
         <span class="timeline-dot"></span>
-        <span class="timeline-copy">${escapeHtml(entry.label)}</span>
+        <span class="timeline-copy">${escapeHtml(item.name)}<small>${escapeHtml(detail)}</small></span>
       </div>
     `;
   }).join("");
@@ -522,7 +608,7 @@ function renderOperations() {
 
 async function openOutputFolder() {
   if (!state.outputDir) {
-    addStatus("No output folder is selected yet.", "Choose a save folder before opening it.", "error");
+    addStatus("No output folder is selected yet.", "Convert a batch first, then open the saved destination.", "error");
     return;
   }
 
@@ -658,6 +744,56 @@ function addStatus(headline, detail = "", tone = "neutral") {
   setStatus(headline, detail, tone);
 }
 
+function flashDropzone(tone, message, detail = "") {
+  if (!elements.dropzone) {
+    return;
+  }
+  if (state.dropFeedbackTimer) {
+    clearTimeout(state.dropFeedbackTimer);
+  }
+  elements.dropzone.classList.remove("is-drop-accepted", "is-drop-rejected", "is-drop-receiving");
+  const className = tone === "pending" ? "is-drop-receiving" : tone === "error" ? "is-drop-rejected" : "is-drop-accepted";
+  elements.dropzone.classList.add(className);
+  elements.dropzone.dataset.dropFeedback = message;
+  if (elements.dropFeedbackTitle) {
+    elements.dropFeedbackTitle.textContent = message;
+  }
+  if (elements.dropFeedbackDetail) {
+    elements.dropFeedbackDetail.textContent = detail || (tone === "pending"
+      ? "Preparing the queue preview."
+      : tone === "error"
+        ? "Only Outlook .msg files can be staged."
+        : "Date-prefixed PDF name prepared.");
+  }
+  if (tone === "pending") {
+    return;
+  }
+  state.dropFeedbackTimer = window.setTimeout(() => {
+    elements.dropzone.classList.remove("is-drop-accepted", "is-drop-rejected", "is-drop-receiving");
+    delete elements.dropzone.dataset.dropFeedback;
+    state.dropFeedbackTimer = 0;
+  }, 2400);
+}
+
+function clearDropzoneFeedback() {
+  if (!elements.dropzone) {
+    return;
+  }
+  if (state.dropFeedbackTimer) {
+    clearTimeout(state.dropFeedbackTimer);
+  }
+  dropzoneController?.clear();
+  elements.dropzone.classList.remove("is-drop-accepted", "is-drop-rejected", "is-drop-receiving", "is-drop-splash");
+  delete elements.dropzone.dataset.dropFeedback;
+  if (elements.dropFeedbackTitle) {
+    elements.dropFeedbackTitle.textContent = "Email staged";
+  }
+  if (elements.dropFeedbackDetail) {
+    elements.dropFeedbackDetail.textContent = "Date-prefixed PDF name prepared.";
+  }
+  state.dropFeedbackTimer = 0;
+}
+
 function renderStatus() {
   if (!elements.helperRow || !elements.simpleStatus || !elements.statusHeadline || !elements.statusDetail) {
     return;
@@ -725,7 +861,7 @@ function closeFeedback() {
 
 function buildFeedbackContext() {
   return {
-    appName: "msg-to-pdf-dropzone",
+    appName: "Email-PDF Converter",
     url: window.location.href,
     path: window.location.pathname,
     queuedCount: state.items.length,
@@ -845,50 +981,63 @@ function renderQueue() {
     return;
   }
 
-  elements.queueList.innerHTML = state.items
-    .map((item) => {
+  const rows = state.items
+    .map((item, index) => {
       const progress = queueProgressStateForItem(item);
       const visual = queueVisualState(item, progress);
       const canRemove = item.stage !== "complete";
       const canRetry = item.stage === "failed";
       const isRemoving = Boolean(state.pendingRemovalsById[item.id]);
+      const isNew = state.recentlyQueuedIds.has(item.id);
       const summary = deriveItemSummary(item, progress);
+      const percent = Math.round(progress?.percent || 0);
+      const sizeLabel = formatByteSize(item.sizeBytes);
 
       return `
-        <div class="queue-item is-${visual.tone}" style="--queue-progress: ${progress?.percent || 0}">
+        <div class="queue-item is-${visual.tone} ${isNew ? "is-new" : ""}" style="--queue-progress: ${progress?.percent || 0}; --row-index: ${index}">
           <div class="queue-main">
-            <span class="queue-file-glyph" aria-hidden="true">${escapeHtml(queueDocumentLabel(item))}</span>
+            <span class="queue-file-glyph is-${visual.tone}" aria-hidden="true">${escapeHtml(queueDocumentLabel(item))}</span>
             <div class="queue-copy">
               <div class="queue-name" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</div>
-              <div class="queue-summary-line">${escapeHtml(summary)}</div>
-              <div class="queue-meta-row">
-                <span class="queue-meta-label">Source</span>
-                <span class="queue-meta-value">${escapeHtml(formatSource(item.source))}</span>
-              </div>
-              <div class="queue-preview-row">
-                <span class="queue-preview-label">Output preview</span>
-                <span class="queue-preview-value">${escapeHtml(outputPreviewLabel(item))}</span>
-              </div>
+              <div class="queue-summary-line">${escapeHtml(sizeLabel || formatSource(item.source))}</div>
             </div>
           </div>
-          <div class="queue-side">
-            <div class="queue-actions">
-              <span class="queue-state-pill is-${visual.tone}">${escapeHtml(visual.label)}</span>
-              ${canRetry ? `<button class="queue-retry" data-retry-id="${escapeHtml(item.id)}" type="button">Retry</button>` : ""}
-              ${
-                canRemove
-                  ? `<button class="queue-remove ${isRemoving ? "is-pending" : ""}" data-remove-id="${escapeHtml(item.id)}" type="button" aria-busy="${isRemoving ? "true" : "false"}">${isRemoving ? "Removing..." : "Remove"}</button>`
-                  : `<span class="queue-complete-badge">Done</span>`
-              }
+          <div class="queue-output">
+            <span class="queue-output-glyph" aria-hidden="true"></span>
+            <div class="queue-copy">
+              <div class="queue-output-name" title="${escapeHtml(outputPreviewLabel(item))}">${escapeHtml(queueOutputName(item))}</div>
+              <div class="queue-summary-line">${isNew ? `<span class="queue-arrival-chip">Filename prepared</span>` : escapeHtml(formatSource(item.source))}</div>
             </div>
+          </div>
+          <div class="queue-progress-cell">
+            <span class="queue-percent">${percent}%</span>
             <div class="queue-progress-track" aria-hidden="true">
               <span class="queue-progress-fill" style="width: ${progress?.percent || 0}%"></span>
             </div>
+          </div>
+          <div class="queue-actions">
+            <span class="queue-state-pill is-${visual.tone}" title="${escapeHtml(summary)}">${escapeHtml(visual.label)}</span>
+            ${canRetry ? `<button class="queue-retry" data-retry-id="${escapeHtml(item.id)}" type="button">Retry</button>` : ""}
+            ${
+              canRemove
+                ? `<button class="queue-remove ${isRemoving ? "is-pending" : ""}" data-remove-id="${escapeHtml(item.id)}" type="button" aria-busy="${isRemoving ? "true" : "false"}">${isRemoving ? "Removing..." : "Remove"}</button>`
+                : `<span class="queue-complete-badge">Done</span>`
+            }
           </div>
         </div>
       `;
     })
     .join("");
+
+  elements.queueList.innerHTML = `
+    <div class="queue-table-header" aria-hidden="true">
+      <span>File Name</span>
+      <span>Output PDF</span>
+      <span>Progress</span>
+      <span>Status</span>
+    </div>
+    ${rows}
+  `;
 
   renderOperations();
   updateActionState();
@@ -898,6 +1047,7 @@ function applyQueueSnapshot(items) {
   const nextItems = items || [];
   const nextProgress = {};
   const idSet = new Set(nextItems.map((item) => item.id));
+  const inferredOutputDir = state.outputDir || parentPath(nextItems.find((item) => item.outputPath)?.outputPath);
 
   nextItems.forEach((item) => {
     const existing = state.queueProgressByTaskId[item.taskId];
@@ -914,8 +1064,28 @@ function applyQueueSnapshot(items) {
   state.queueProgressByTaskId = nextProgress;
   state.pendingRemovalsById = Object.fromEntries(Object.entries(state.pendingRemovalsById).filter(([id]) => idSet.has(id)));
   state.activeConvertIds = state.activeConvertIds.filter((id) => idSet.has(id));
+  if (inferredOutputDir && !state.outputDir) {
+    state.outputDir = inferredOutputDir;
+    state.outputDirLabel = lastPathSegment(inferredOutputDir);
+  }
   state.items = nextItems;
   renderQueue();
+}
+
+function triggerQueueHandoff() {
+  if (!elements.queuePanel) {
+    return;
+  }
+  elements.queuePanel.classList.remove("is-handoff");
+  void elements.queuePanel.offsetWidth;
+  elements.queuePanel.classList.add("is-handoff");
+  if (state.queueHandoffTimer) {
+    clearTimeout(state.queueHandoffTimer);
+  }
+  state.queueHandoffTimer = window.setTimeout(() => {
+    elements.queuePanel.classList.remove("is-handoff");
+    state.queueHandoffTimer = 0;
+  }, 2500);
 }
 
 function mergeQueueEvent(payload) {
@@ -926,6 +1096,10 @@ function mergeQueueEvent(payload) {
   const outputPath =
     payload.outputPath ||
     (payload.meta && typeof payload.meta.outputPath === "string" ? payload.meta.outputPath : "") ||
+    "";
+  const outputName =
+    payload.outputName ||
+    (payload.meta && typeof payload.meta.outputName === "string" ? payload.meta.outputName : "") ||
     "";
 
   let changed = false;
@@ -940,6 +1114,7 @@ function mergeQueueEvent(payload) {
       pipeline: payload.pipeline || item.pipeline,
       error: payload.error || item.error,
       success: typeof payload.success === "boolean" ? payload.success : item.success,
+      outputName: outputName || item.outputName,
       outputPath: outputPath || item.outputPath,
     };
   });
@@ -1038,17 +1213,52 @@ async function loadSettings() {
 
 async function uploadFiles(files, { sourceHint = "upload" } = {}) {
   if (!files?.length) {
+    flashDropzone("error", "No MSG files detected", "Drop Outlook emails or .msg files into the workspace.");
+    addStatus("No compatible files were detected.", "Drop Outlook emails or .msg files into the workspace.", "error");
     return;
   }
+  const fileCount = files.length;
+  flashDropzone(
+    "pending",
+    fileCount === 1 ? "Receiving email..." : `Receiving ${fileCount} emails...`,
+    "Reading metadata and preparing PDF names.",
+  );
   const formData = new FormData();
   [...files].forEach((file) => formData.append("files", file));
   formData.append("source_hint", sourceHint);
-  const payload = await api("/api/upload", { method: "POST", body: formData });
+  const [payload] = await Promise.all([
+    api("/api/upload", { method: "POST", body: formData }),
+    delay(700),
+  ]);
+  const acceptedIds = new Set((payload.accepted || []).map((item) => item.id).filter(Boolean));
+  state.recentlyQueuedIds = acceptedIds;
   applyQueueSnapshot(payload.items || []);
   if (payload.accepted?.length) {
-    addStatus(`Queued ${payload.accepted.length} file(s).`, "Review the destination and convert when you are ready.", "success");
+    const count = payload.accepted.length;
+    flashDropzone(
+      "success",
+      `${count} email${count === 1 ? "" : "s"} staged`,
+      "Date-prefixed PDF names are ready in the queue.",
+    );
+    addStatus(
+      `Ready to convert: ${count} email${count === 1 ? "" : "s"} staged.`,
+      "Date-prefixed PDF names are prepared in the queue.",
+      "success",
+    );
+    triggerQueueHandoff();
+    if (state.newRowsTimer) {
+      clearTimeout(state.newRowsTimer);
+    }
+    state.newRowsTimer = window.setTimeout(() => {
+      state.recentlyQueuedIds = new Set();
+      state.newRowsTimer = 0;
+      renderQueue();
+    }, 2600);
   }
   if (payload.rejectedCount) {
+    if (!payload.accepted?.length) {
+      flashDropzone("error", "No compatible files accepted", "Only Outlook .msg files can be staged.");
+    }
     addStatus(
       `${payload.rejectedCount} file(s) were skipped.`,
       `Only .msg files are accepted and the queue limit is ${state.maxFiles}.`,
@@ -1088,12 +1298,15 @@ async function convertQueue() {
     return;
   }
 
-  if (!state.outputDir) {
+  if (state.capabilities.nativeOutputPicker) {
     const selected = await chooseOutputFolder({ silentCancel: false });
     if (!selected) {
-      addStatus("Choose a save folder to continue.", "Conversion has not started yet.", "error");
+      addStatus("Choose a destination to continue.", "Conversion has not started yet.", "error");
       return;
     }
+  } else if (!state.outputDir) {
+    addStatus("Output folder is required.", "The hosted deployment needs a server-managed destination.", "error");
+    return;
   }
 
   const ids = convertibleItems.map((item) => item.id);
@@ -1132,7 +1345,7 @@ async function retryItem(id) {
   if (!state.outputDir) {
     const selected = await chooseOutputFolder({ silentCancel: false });
     if (!selected) {
-      addStatus("Choose a save folder before retrying.", "Retry has not started yet.", "error");
+      addStatus("Choose a destination before retrying.", "Retry has not started yet.", "error");
       return;
     }
   }
@@ -1290,35 +1503,19 @@ function setDropzoneCopy(mode) {
 }
 
 function installDropzoneEvents() {
-  const prevent = (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-  };
-
-  ["dragenter", "dragover"].forEach((eventName) => {
-    elements.dropzone.addEventListener(eventName, (event) => {
-      prevent(event);
-      elements.dropzone.classList.add("is-dragover");
-      const sourceHint = detectUploadSourceFromDrop(event.dataTransfer);
-      setDropzoneCopy(sourceHint === "outlook" ? "outlook" : "upload");
-    });
-  });
-
-  ["dragleave", "drop"].forEach((eventName) => {
-    elements.dropzone.addEventListener(eventName, (event) => {
-      prevent(event);
-      elements.dropzone.classList.remove("is-dragover");
-      setDropzoneCopy("default");
-    });
-  });
-
-  elements.dropzone.addEventListener("drop", async (event) => {
-    try {
-      const sourceHint = detectUploadSourceFromDrop(event.dataTransfer);
-      await runBusy(() => uploadFiles(event.dataTransfer?.files, { sourceHint }));
-    } catch (error) {
+  dropzoneController = createDropzoneController({
+    canvas: elements.dropRippleCanvas,
+    dropzone: elements.dropzone,
+    onDrop: (files, options) => runBusy(() => uploadFiles(files, options)),
+    onError: (error) => {
+      clearDropzoneFeedback();
+      flashDropzone("error", "Upload failed", error.message);
       addStatus("Upload failed.", error.message, "error");
-    }
+    },
+    onFinally: () => {
+      setDropzoneCopy("default");
+    },
+    sourceHintFromDrop: detectUploadSourceFromDrop,
   });
 }
 
@@ -1377,6 +1574,8 @@ function installActionEvents() {
       await runBusy(() => uploadFiles(elements.fileInput.files));
       elements.fileInput.value = "";
     } catch (error) {
+      clearDropzoneFeedback();
+      flashDropzone("error", "Upload failed", error.message);
       addStatus("Upload failed.", error.message, "error");
     }
   });

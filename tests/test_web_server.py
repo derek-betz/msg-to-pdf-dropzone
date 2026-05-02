@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from io import BytesIO
 import json
 from pathlib import Path
@@ -8,7 +9,9 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from msg_to_pdf_dropzone.converter import ConversionResult
+from msg_to_pdf_dropzone.models import EmailRecord
 from msg_to_pdf_dropzone.task_events import emit_task_event
+from msg_to_pdf_dropzone.thread_logic import normalize_thread_subject
 from msg_to_pdf_dropzone.web_server import EventBroker, create_app, publish_preview_sequence
 
 
@@ -105,6 +108,48 @@ def test_upload_accepts_outlook_source_hint(monkeypatch, tmp_path: Path) -> None
     assert len(payload["accepted"]) == 1
     assert payload["accepted"][0]["source"] == "outlook"
     assert payload["items"][0]["source"] == "outlook"
+
+
+def test_upload_previews_thread_date_prefixed_output_names(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("msg_to_pdf_dropzone.web_server.STAGING_DIR", tmp_path / "staging")
+
+    def fake_parse_msg_file(path: Path) -> EmailRecord:
+        if path.name.endswith("older.msg"):
+            subject = "RE: Project Update"
+            sent_at = datetime(2026, 4, 10, 18, tzinfo=timezone.utc)
+        else:
+            subject = "Project Update"
+            sent_at = datetime(2026, 4, 30, 18, tzinfo=timezone.utc)
+        return EmailRecord(
+            source_path=path,
+            subject=subject,
+            sent_at=sent_at,
+            sender="sender@example.com",
+            to="to@example.com",
+            cc="",
+            body="Body",
+            html_body="",
+            attachment_names=[],
+            thread_key=normalize_thread_subject(subject),
+        )
+
+    monkeypatch.setattr("msg_to_pdf_dropzone.web_server.parse_msg_file", fake_parse_msg_file)
+    client = TestClient(create_app())
+
+    upload = client.post(
+        "/api/upload",
+        files=[
+            ("files", ("older.msg", BytesIO(b"older-msg"), "application/vnd.ms-outlook")),
+            ("files", ("latest.msg", BytesIO(b"latest-msg"), "application/vnd.ms-outlook")),
+        ],
+    )
+
+    assert upload.status_code == 200
+    items = upload.json()["items"]
+    assert [item["outputName"] for item in items] == [
+        "2026-04-30_RE_ Project Update.pdf",
+        "2026-04-30_Project Update.pdf",
+    ]
 
 
 def test_completed_items_stay_visible_without_blocking_new_uploads(monkeypatch, tmp_path: Path) -> None:

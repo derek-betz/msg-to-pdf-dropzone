@@ -27,8 +27,10 @@ import uvicorn
 
 from .converter import MAX_FILES_PER_BATCH, ConversionResult, convert_msg_files
 from .feedback import list_feedback_entries, record_feedback, send_feedback_email
+from .msg_parser import parse_msg_file
 from .outlook_selection import extract_selected_outlook_messages
 from .task_events import TaskEvent, TaskMetaValue, build_batch_meta_for_paths, default_task_id_for_path, emit_task_event
+from .thread_logic import build_pdf_filename, get_latest_thread_dates
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 WEB_UI_DIR = PACKAGE_ROOT / "web_ui"
@@ -144,6 +146,7 @@ class StagedFile:
     pipeline: str | None = None
     error: str | None = None
     success: bool | None = None
+    output_name: str | None = None
     output_path: str | None = None
     cleanup: bool = True
 
@@ -163,6 +166,8 @@ class StagedFile:
             payload["error"] = self.error
         if self.success is not None:
             payload["success"] = self.success
+        if self.output_name is not None:
+            payload["outputName"] = self.output_name
         if self.output_path is not None:
             payload["outputPath"] = self.output_path
         return payload
@@ -278,8 +283,12 @@ class StageStore:
         return convertible
 
     def apply_task_event(self, event: TaskEvent) -> None:
+        output_name = None
         output_path = None
         if event.meta:
+            raw_output_name = event.meta.get("outputName")
+            if isinstance(raw_output_name, str) and raw_output_name:
+                output_name = raw_output_name
             raw_output_path = event.meta.get("outputPath")
             if isinstance(raw_output_path, str) and raw_output_path:
                 output_path = raw_output_path
@@ -292,8 +301,38 @@ class StageStore:
             item.pipeline = event.pipeline
             item.error = event.error
             item.success = event.success
+            if output_name is not None:
+                item.output_name = output_name
             if output_path is not None:
                 item.output_path = output_path
+
+    def refresh_output_previews(self) -> None:
+        with self._lock:
+            items = [item for item in self._items.values() if item.stage != "complete"]
+
+        records = []
+        records_by_path: dict[Path, Any] = {}
+        for item in items:
+            try:
+                record = parse_msg_file(item.path)
+            except Exception:
+                continue
+            records.append(record)
+            records_by_path[item.path.resolve()] = record
+
+        if not records:
+            return
+
+        latest_thread_dates = get_latest_thread_dates(records)
+        with self._lock:
+            for item in self._items.values():
+                record = records_by_path.get(item.path.resolve())
+                if record is None:
+                    continue
+                latest_date = latest_thread_dates.get(record.thread_key)
+                if latest_date is None:
+                    continue
+                item.output_name = build_pdf_filename(record.subject, latest_date)
 
     def _register(self, path: Path, *, name: str, source: str) -> StagedFile:
         item = StagedFile(
@@ -653,6 +692,7 @@ def create_app() -> FastAPI:
         queued_before = stage_store.active_count()
         normalized_source = "outlook" if source_hint == "outlook" else "upload"
         staged = await stage_store.stage_uploads(files, source=normalized_source)
+        await asyncio.to_thread(stage_store.refresh_output_previews)
         batch_meta = build_batch_meta(staged)
         for item in staged:
             meta = batch_meta[item.path.resolve()]
@@ -685,6 +725,7 @@ def create_app() -> FastAPI:
         event_broker: EventBroker = app.state.event_broker
         staged_paths = await asyncio.to_thread(extract_selected_outlook_messages, stage_store.remaining_slots())
         staged = stage_store.stage_paths(staged_paths, source="outlook")
+        await asyncio.to_thread(stage_store.refresh_output_previews)
         batch_meta = build_batch_meta(staged)
         for item in staged:
             meta = batch_meta[item.path.resolve()]
