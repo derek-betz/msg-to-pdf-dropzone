@@ -10,7 +10,7 @@ function easeOutQuart(value) {
   return 1 - Math.pow(1 - value, 4);
 }
 
-function captureDropFiles(dataTransfer) {
+export function captureDropFiles(dataTransfer) {
   const items = Array.from(dataTransfer?.items || []);
   const itemFiles = items
     .filter((item) => item.kind === "file")
@@ -20,6 +20,11 @@ function captureDropFiles(dataTransfer) {
     return itemFiles;
   }
   return Array.from(dataTransfer?.files || []);
+}
+
+export function isPointerInsideElement(event, element) {
+  const rect = element.getBoundingClientRect();
+  return event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom;
 }
 
 function resizeRippleCanvas(dropzone, canvas) {
@@ -214,10 +219,7 @@ export function createDropzoneController({
     dropzone.classList.toggle("is-dragover", isOver);
   };
 
-  const isPointInsideDropzone = (event) => {
-    const rect = dropzone.getBoundingClientRect();
-    return event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom;
-  };
+  const isPointInsideDropzone = (event) => isPointerInsideElement(event, dropzone);
 
   const prevent = (event) => {
     event.preventDefault();
@@ -254,13 +256,20 @@ export function createDropzoneController({
   };
 
   const handleDocumentDragEnd = () => setDragOver(false);
-  const handleDocumentDrop = () => setDragOver(false);
+  const handleDocumentDragOver = (event) => {
+    event.preventDefault();
+  };
+  const handleDocumentDrop = (event) => {
+    event.preventDefault();
+    setDragOver(false);
+  };
 
   dropzone.addEventListener("dragenter", handleDragEnterOrOver);
   dropzone.addEventListener("dragover", handleDragEnterOrOver);
   dropzone.addEventListener("dragleave", handleDragLeave);
   dropzone.addEventListener("drop", handleDrop);
   document.addEventListener("dragend", handleDocumentDragEnd);
+  document.addEventListener("dragover", handleDocumentDragOver);
   document.addEventListener("drop", handleDocumentDrop);
 
   return {
@@ -278,6 +287,7 @@ export function createDropzoneController({
       dropzone.removeEventListener("dragleave", handleDragLeave);
       dropzone.removeEventListener("drop", handleDrop);
       document.removeEventListener("dragend", handleDocumentDragEnd);
+      document.removeEventListener("dragover", handleDocumentDragOver);
       document.removeEventListener("drop", handleDocumentDrop);
       this.clear();
     },

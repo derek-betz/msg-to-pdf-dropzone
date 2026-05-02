@@ -1,4 +1,4 @@
-import { createDropzoneController } from "./dropzone_controller.js";
+import { createDropzoneController } from "./dropzone_controller.js?v=dropzone-contract-1";
 
 const QUEUE_STAGE_PROGRESS = {
   output_folder_selected: {

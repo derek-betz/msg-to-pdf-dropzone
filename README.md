@@ -193,6 +193,7 @@ This is intended for local debugging, event-stream inspection, and regression an
 
 - Maximum input files per batch is 25.
 - Filenames are sanitized for Windows.
+- Queue preview names are server-provided and intentionally use the latest sent date in each normalized email thread. See `docs/web-dropzone-contract.md`.
 - If multiple outputs would have the same name, a numeric suffix is added.
 - Outlook drag handling uses COM to export selected items to temporary `.msg` files when direct file paths are not provided.
 - PDF generation now defaults to the HTML-to-PDF Edge path, then falls back to the built-in renderer. Set `MSG_TO_PDF_RENDER_STRATEGY=fidelity` to opt into the Outlook MHTML + Edge path first.
