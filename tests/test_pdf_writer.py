@@ -1,12 +1,25 @@
 from __future__ import annotations
 
+import base64
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
 import msg_to_pdf_dropzone.pdf_writer as pdf_writer
 from msg_to_pdf_dropzone.models import EmailRecord, InlineImageAsset
-from msg_to_pdf_dropzone.pdf_writer import PdfWriteDiagnostics, build_email_html_document, write_email_pdf
+from msg_to_pdf_dropzone.pdf_writer import (
+    PdfWriteDiagnostics,
+    _as_paragraph_text,
+    _estimate_data_uri_bytes,
+    _extract_body_html_fragment,
+    _format_body_blocks,
+    _format_sent_value,
+    _is_content_image,
+    _is_small_signature_image,
+    _parse_numeric_dimension,
+    build_email_html_document,
+    write_email_pdf,
+)
 from msg_to_pdf_dropzone.thread_logic import normalize_thread_subject
 
 
@@ -448,3 +461,163 @@ def test_print_web_document_via_edge_disables_pdf_headers_and_footers(
     assert "--no-pdf-header-footer" in command
     assert "--print-to-pdf-no-header" in command
     assert any(part.startswith("--print-to-pdf=") for part in command)
+
+
+def test_format_body_blocks_splits_on_blank_lines() -> None:
+    result = _format_body_blocks("First paragraph.\n\nSecond paragraph.")
+    assert result == ["First paragraph.", "Second paragraph."]
+
+
+def test_format_body_blocks_returns_placeholder_for_empty_body() -> None:
+    assert _format_body_blocks("") == ["(No body text.)"]
+    assert _format_body_blocks("   ") == ["(No body text.)"]
+
+
+def test_format_body_blocks_normalizes_crlf() -> None:
+    result = _format_body_blocks("Line one\r\n\r\nLine two")
+    assert result == ["Line one", "Line two"]
+
+
+def test_as_paragraph_text_escapes_html_special_chars() -> None:
+    result = _as_paragraph_text("Hello <world> & 'you'")
+    assert "&lt;world&gt;" in result
+    assert "&amp;" in result
+
+
+def test_as_paragraph_text_replaces_newlines_with_br() -> None:
+    result = _as_paragraph_text("line one\nline two")
+    assert "<br/>" in result
+
+
+def test_extract_body_html_fragment_extracts_body_content() -> None:
+    html = "<html><body><p>Hello world</p></body></html>"
+    result = _extract_body_html_fragment(html)
+    assert "<p>Hello world</p>" in result
+
+
+def test_extract_body_html_fragment_removes_script_tags() -> None:
+    html = "<html><body><script>evil()</script><p>Safe</p></body></html>"
+    result = _extract_body_html_fragment(html)
+    assert "evil()" not in result
+    assert "<p>Safe</p>" in result
+
+
+def test_extract_body_html_fragment_returns_empty_for_empty_input() -> None:
+    assert _extract_body_html_fragment("") == ""
+    assert _extract_body_html_fragment("   ") == ""
+
+
+def test_extract_body_html_fragment_returns_full_content_when_no_body_tag() -> None:
+    html = "<p>No body tag here</p>"
+    result = _extract_body_html_fragment(html)
+    assert "<p>No body tag here</p>" in result
+
+
+def test_parse_numeric_dimension_returns_integer_from_plain_number() -> None:
+    assert _parse_numeric_dimension("100") == 100
+
+
+def test_parse_numeric_dimension_extracts_number_from_css_value() -> None:
+    # Python banker's rounding: round(100.5) == 100, round(101.5) == 102
+    assert _parse_numeric_dimension("100.5px") == 100
+    assert _parse_numeric_dimension("101.5px") == 102
+    assert _parse_numeric_dimension("200px") == 200
+
+
+def test_parse_numeric_dimension_returns_none_for_zero() -> None:
+    assert _parse_numeric_dimension("0") is None
+
+
+def test_parse_numeric_dimension_returns_none_for_empty() -> None:
+    assert _parse_numeric_dimension("") is None
+
+
+def test_parse_numeric_dimension_returns_none_for_non_numeric() -> None:
+    assert _parse_numeric_dimension("auto") is None
+
+
+def test_is_small_signature_image_with_small_dims_and_size() -> None:
+    assert _is_small_signature_image(100, 50, 5 * 1024) is True
+
+
+def test_is_small_signature_image_with_large_dimension() -> None:
+    assert _is_small_signature_image(300, 200, 5 * 1024) is False
+
+
+def test_is_small_signature_image_with_large_byte_size() -> None:
+    assert _is_small_signature_image(100, 50, 25 * 1024) is False
+
+
+def test_is_small_signature_image_with_no_dimensions() -> None:
+    assert _is_small_signature_image(None, None, 5 * 1024) is False
+
+
+def test_is_content_image_with_large_file_size() -> None:
+    assert _is_content_image(100, 50, 45 * 1024) is True
+
+
+def test_is_content_image_with_large_dimension() -> None:
+    assert _is_content_image(300, 100, 1024) is True
+
+
+def test_is_content_image_with_large_area() -> None:
+    assert _is_content_image(250, 200, 1024) is True
+
+
+def test_is_content_image_returns_false_for_small_image() -> None:
+    assert _is_content_image(100, 50, 1024) is False
+
+
+def test_estimate_data_uri_bytes_base64_encoded() -> None:
+    data = b"hello world test data payload"
+    encoded = base64.b64encode(data).decode("ascii")
+    uri = f"data:image/png;base64,{encoded}"
+    estimated = _estimate_data_uri_bytes(uri)
+    assert abs(estimated - len(data)) <= 3
+
+
+def test_estimate_data_uri_bytes_returns_zero_for_missing_comma() -> None:
+    assert _estimate_data_uri_bytes("no comma here") == 0
+
+
+def test_format_sent_value_formats_utc_datetime() -> None:
+    dt = datetime(2026, 3, 15, 10, 30, 0, tzinfo=timezone.utc)
+    result = _format_sent_value(dt)
+    assert "2026-03-15" in result
+    assert "10:30:00" in result
+
+
+def test_build_email_html_document_renders_plain_body_when_no_html_body() -> None:
+    record = EmailRecord(
+        source_path=Path("sample.msg"),
+        subject="Plain Body Test",
+        sent_at=datetime(2026, 2, 20, 12, 0, tzinfo=timezone.utc),
+        sender="sender@example.com",
+        to="to@example.com",
+        cc="",
+        body="This is plain text.",
+        html_body="",
+        attachment_names=[],
+        thread_key=normalize_thread_subject("Plain Body Test"),
+    )
+    html = build_email_html_document(record)
+    assert "plain-body" in html
+    assert "This is plain text." in html
+
+
+def test_build_email_html_document_escapes_special_chars_in_subject() -> None:
+    record = EmailRecord(
+        source_path=Path("sample.msg"),
+        subject="Subject <with> & special",
+        sent_at=datetime(2026, 2, 20, 12, 0, tzinfo=timezone.utc),
+        sender="sender@example.com",
+        to="to@example.com",
+        cc="",
+        body="Body",
+        html_body="",
+        attachment_names=[],
+        thread_key=normalize_thread_subject("Subject <with> & special"),
+    )
+    html = build_email_html_document(record)
+    assert "&lt;with&gt;" in html
+    assert "&amp;" in html

@@ -3,7 +3,14 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
-from msg_to_pdf_dropzone.converter import ConversionError, convert_msg_files
+import pytest
+
+from msg_to_pdf_dropzone.converter import (
+    ConversionError,
+    _format_seconds,
+    _normalize_event_pipeline_name,
+    convert_msg_files,
+)
 from msg_to_pdf_dropzone.models import EmailRecord
 from msg_to_pdf_dropzone.task_events import emit_task_event
 from msg_to_pdf_dropzone.thread_logic import get_latest_thread_dates, normalize_thread_subject
@@ -252,3 +259,73 @@ def test_convert_msg_files_preserves_batch_meta_across_events(monkeypatch, tmp_p
     assert all(event.meta is not None for event in events)
     assert all(event.meta["batchId"] == "msg-batch-001" for event in events if event.meta is not None)
     assert all(event.meta["batchSize"] == 3 for event in events if event.meta is not None)
+
+
+def test_convert_msg_files_raises_for_empty_input(tmp_path: Path) -> None:
+    with pytest.raises(ConversionError, match="No .msg files"):
+        convert_msg_files([], tmp_path)
+
+
+def test_convert_msg_files_skips_non_msg_files(tmp_path: Path) -> None:
+    txt_path = tmp_path / "doc.txt"
+    txt_path.touch()
+    result = convert_msg_files([txt_path], tmp_path)
+    assert len(result.skipped_files) == 1
+    assert result.skipped_files[0] == txt_path
+    assert any("doc.txt" in err for err in result.errors)
+
+
+def test_convert_msg_files_all_non_msg_returns_empty_timing_lines(tmp_path: Path) -> None:
+    txt_path = tmp_path / "not_a_msg.pdf"
+    txt_path.touch()
+    result = convert_msg_files([txt_path], tmp_path)
+    assert result.converted_files == []
+    assert result.timing_lines
+
+
+def test_normalize_event_pipeline_name_maps_known_values() -> None:
+    assert _normalize_event_pipeline_name("reportlab_fast") == "reportlab"
+    assert _normalize_event_pipeline_name("edge_html") == "edge_html"
+    assert _normalize_event_pipeline_name("outlook_edge") == "outlook_edge"
+    assert _normalize_event_pipeline_name("reportlab") == "reportlab"
+
+
+def test_normalize_event_pipeline_name_returns_none_for_unknown() -> None:
+    assert _normalize_event_pipeline_name("unknown_pipeline") is None
+    assert _normalize_event_pipeline_name("") is None
+
+
+def test_format_seconds_formats_with_two_decimal_places() -> None:
+    assert _format_seconds(1.5) == "1.50s"
+    assert _format_seconds(0.0) == "0.00s"
+    assert _format_seconds(12.345) == "12.35s"
+
+
+def test_convert_msg_files_uses_default_task_id_when_not_provided(monkeypatch, tmp_path: Path) -> None:
+    email_path = tmp_path / "default_id.msg"
+    email_path.touch()
+
+    record = EmailRecord(
+        source_path=email_path,
+        subject="Default ID Test",
+        sent_at=datetime(2026, 1, 6, tzinfo=timezone.utc),
+        sender="a@example.com",
+        to="b@example.com",
+        cc="",
+        body="body",
+        html_body="",
+        attachment_names=[],
+        thread_key=normalize_thread_subject("Default ID Test"),
+    )
+
+    monkeypatch.setattr("msg_to_pdf_dropzone.converter.parse_msg_file", lambda _p: record)
+    monkeypatch.setattr(
+        "msg_to_pdf_dropzone.converter.write_email_pdf",
+        lambda _r, output_path, **_k: output_path.write_text("ok", encoding="utf-8"),
+    )
+
+    events = []
+    result = convert_msg_files([email_path], tmp_path, event_sink=events.append)
+
+    assert result.converted_files
+    assert all(event.task_id.startswith("msg-to-pdf-") for event in events)
