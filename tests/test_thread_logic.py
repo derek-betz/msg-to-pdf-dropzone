@@ -7,6 +7,7 @@ from msg_to_pdf_dropzone.models import EmailRecord
 from msg_to_pdf_dropzone.thread_logic import (
     build_pdf_filename,
     get_latest_thread_dates,
+    make_unique_path,
     normalize_thread_subject,
     sanitize_filename_part,
 )
@@ -65,3 +66,37 @@ def test_sanitize_filename_part_defaults_when_empty() -> None:
 
 def test_sanitize_filename_part_preserves_internal_double_spaces() -> None:
     assert sanitize_filename_part("DES  2101166  SR 127") == "DES  2101166  SR 127"
+
+
+def test_sanitize_filename_part_truncates_at_max_length() -> None:
+    long_name = "A" * 150
+    result = sanitize_filename_part(long_name)
+    assert len(result) <= 120
+
+
+def test_sanitize_filename_part_replaces_invalid_chars() -> None:
+    assert sanitize_filename_part("file<name>:test") == "file_name__test"
+
+
+def test_normalize_thread_subject_returns_no_subject_for_empty_string() -> None:
+    assert normalize_thread_subject("") == "no-subject"
+    assert normalize_thread_subject("   ") == "no-subject"
+
+
+def test_make_unique_path_returns_unchanged_when_no_conflict(tmp_path: Path) -> None:
+    path = tmp_path / "output.pdf"
+    assert make_unique_path(path) == path
+
+
+def test_make_unique_path_adds_counter_suffix_on_conflict(tmp_path: Path) -> None:
+    existing = tmp_path / "output.pdf"
+    existing.write_text("x", encoding="utf-8")
+    new_path = make_unique_path(existing)
+    assert new_path == tmp_path / "output (2).pdf"
+
+
+def test_make_unique_path_increments_counter_past_existing_duplicates(tmp_path: Path) -> None:
+    for name in ("output.pdf", "output (2).pdf"):
+        (tmp_path / name).write_text("x", encoding="utf-8")
+    result = make_unique_path(tmp_path / "output.pdf")
+    assert result == tmp_path / "output (3).pdf"
