@@ -40,6 +40,59 @@ function Set-DefaultEnv {
     }
 }
 
+function Stop-ExistingListener {
+    param(
+        [string]$AppName,
+        [string]$HostValue,
+        [int]$PortValue
+    )
+
+    if ([string]::IsNullOrWhiteSpace($HostValue) -or $HostValue -in @("127.0.0.1", "localhost")) {
+        Write-Host "Skipping listener cleanup for ${AppName}; host is ${HostValue}."
+        return
+    }
+
+    $endpoint = "${HostValue}:${PortValue}"
+    Write-Host "Checking for existing ${AppName} listener on ${endpoint}..."
+
+    $pattern = "^\s*TCP\s+$([regex]::Escape($endpoint))\s+\S+\s+LISTENING\s+(\d+)\s*$"
+    $listenerPids = netstat -ano -p tcp |
+        ForEach-Object {
+            if ($_ -match $pattern) {
+                [int]$Matches[1]
+            }
+        } |
+        Sort-Object -Unique
+
+    foreach ($pidValue in $listenerPids) {
+        if ($pidValue -le 0) {
+            continue
+        }
+
+        Write-Host "Stopping existing ${AppName} listener process tree: PID ${pidValue}"
+        & taskkill.exe /PID $pidValue /T /F
+        if ($LASTEXITCODE -ne 0) {
+            throw "Unable to stop existing ${AppName} listener PID ${pidValue} on ${endpoint}."
+        }
+    }
+
+    Start-Sleep -Seconds 2
+
+    $remaining = netstat -ano -p tcp |
+        ForEach-Object {
+            if ($_ -match $pattern) {
+                [int]$Matches[1]
+            }
+        } |
+        Sort-Object -Unique
+
+    if ($remaining) {
+        throw "Existing ${AppName} listener(s) still remain on ${endpoint}: $($remaining -join ', ')"
+    }
+
+    Write-Host "No existing ${AppName} listener remains on ${endpoint}."
+}
+
 $pythonExe = Join-Path $AppRoot ".venv\Scripts\python.exe"
 if (-not (Test-Path -LiteralPath $pythonExe)) {
     throw "Python executable not found: $pythonExe"
@@ -69,6 +122,13 @@ Set-DefaultEnv -Name "MSG_TO_PDF_RENDER_STRATEGY" -Value "fast"
 
 $effectiveHost = [Environment]::GetEnvironmentVariable("MSG_TO_PDF_HOST", "Process")
 $effectivePort = [Environment]::GetEnvironmentVariable("MSG_TO_PDF_PORT", "Process")
+$sourceRoot = Join-Path $AppRoot "src"
+$existingPythonPath = [Environment]::GetEnvironmentVariable("PYTHONPATH", "Process")
+$nextPythonPath = if ($existingPythonPath) { "$sourceRoot;$existingPythonPath" } else { $sourceRoot }
+[Environment]::SetEnvironmentVariable("PYTHONPATH", $nextPythonPath, "Process")
+
+Stop-ExistingListener -AppName "msg-to-pdf-dropzone" -HostValue $effectiveHost -PortValue ([int]$effectivePort)
+Set-Location -LiteralPath $AppRoot
 
 Write-Host "Starting msg-to-pdf-dropzone"
 Write-Host "AppRoot: $AppRoot"
