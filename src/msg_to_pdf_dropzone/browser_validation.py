@@ -24,11 +24,13 @@ from .corpus_validator import (
     discover_case_pairs,
 )
 from .pdf_writer import RENDER_STRATEGY_FAST, RENDER_STRATEGY_FIDELITY
+from .thread_logic import DEFAULT_FILENAME_STYLE, FILENAME_STYLES, normalize_filename_style
 
 DEFAULT_CASES_DIR = Path("emails-for-testing")
 DEFAULT_OUTPUT_ROOT = Path(".local-browser-run")
 DEFAULT_HOST = "127.0.0.1"
-OUTPUT_NAME_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}_.+\.pdf$")
+DATE_PREFIX_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}_.+\.pdf$")
+DATE_SENDER_PREFIX_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}_.+_.+\.pdf$")
 NUMERIC_SUFFIX_PATTERN = re.compile(r" \(\d+\)\.pdf$", re.IGNORECASE)
 EXPECTED_STAGE_ORDER = [
     "drop_received",
@@ -70,6 +72,24 @@ def _wait_for_server(base_url: str, *, timeout_seconds: float) -> None:
     raise RuntimeError(f"Timed out waiting for browser server at {base_url}: {last_error}")
 
 
+def _strip_numeric_suffix(output_name: str) -> str:
+    return NUMERIC_SUFFIX_PATTERN.sub(".pdf", output_name)
+
+
+def _output_name_matches_style(output_name: str, *, filename_style: str) -> bool:
+    normalized_style = normalize_filename_style(filename_style)
+    normalized_output_name = _strip_numeric_suffix(output_name)
+    if not normalized_output_name.lower().endswith(".pdf"):
+        return False
+    if normalized_style == "date_subject":
+        return bool(DATE_PREFIX_PATTERN.match(normalized_output_name))
+    if normalized_style == "date_sender_subject":
+        return bool(DATE_SENDER_PREFIX_PATTERN.match(normalized_output_name))
+    if normalized_style == "sender_subject":
+        return "_" in normalized_output_name.removesuffix(".pdf") and not DATE_PREFIX_PATTERN.match(normalized_output_name)
+    return not DATE_PREFIX_PATTERN.match(normalized_output_name)
+
+
 def _event_listener(
     base_url: str,
     events: list[dict[str, Any]],
@@ -101,7 +121,12 @@ def _event_listener(
         connected.set()
 
 
-def summarize_task_events(events: list[dict[str, Any]], expected_task_ids: list[str]) -> dict[str, Any]:
+def summarize_task_events(
+    events: list[dict[str, Any]],
+    expected_task_ids: list[str],
+    *,
+    filename_style: str = DEFAULT_FILENAME_STYLE,
+) -> dict[str, Any]:
     stage_events = [event for event in events if isinstance(event, dict) and event.get("stage")]
     events_by_task_id: dict[str, list[dict[str, Any]]] = defaultdict(list)
     pipeline_counts: Counter[str] = Counter()
@@ -172,6 +197,9 @@ def summarize_task_events(events: list[dict[str, Any]], expected_task_ids: list[
 
     output_names = [output_names_by_task_id[task_id] for task_id in expected_task_ids if task_id in output_names_by_task_id]
     numeric_suffix_outputs = sorted(name for name in output_names if NUMERIC_SUFFIX_PATTERN.search(name))
+    style_mismatched_outputs = sorted(
+        name for name in output_names if not _output_name_matches_style(name, filename_style=filename_style)
+    )
 
     return {
         "taskCount": len(expected_task_ids),
@@ -181,7 +209,9 @@ def summarize_task_events(events: list[dict[str, Any]], expected_task_ids: list[
         "pipelineCounts": dict(sorted(pipeline_counts.items())),
         "outputNamesByTaskId": output_names_by_task_id,
         "outputPathsByTaskId": output_paths_by_task_id,
-        "allOutputNamesMatchPattern": bool(output_names) and all(OUTPUT_NAME_PATTERN.match(name) for name in output_names),
+        "filenameStyle": normalize_filename_style(filename_style),
+        "allOutputNamesMatchPattern": bool(output_names) and not style_mismatched_outputs,
+        "styleMismatchedOutputs": style_mismatched_outputs,
         "numericSuffixOutputs": numeric_suffix_outputs,
         "failures": failures,
         "missingTerminalTasks": sorted(missing_terminal_tasks),
@@ -273,6 +303,14 @@ def validate_generated_outputs(
 def _write_markdown(summary: dict[str, Any], output_path: Path) -> None:
     event_summary = summary["eventSummary"]
     validation_summary = summary["validationSummary"]
+    semantic_line = (
+        "`skipped`"
+        if validation_summary.get("skipped")
+        else (
+            f"`{validation_summary['passedCount']} passed / {validation_summary['failedCount']} failed / "
+            f"{validation_summary['warningCaseCount']} warnings`"
+        )
+    )
     lines = [
         "# Browser Golden Corpus Validation",
         "",
@@ -280,18 +318,20 @@ def _write_markdown(summary: dict[str, Any], output_path: Path) -> None:
         f"- Cases dir: `{summary['casesDir']}`",
         f"- Browser URL: `{summary['baseUrl']}`",
         f"- Render strategy: `{summary['renderStrategy']}`",
+        f"- Filename style: `{summary['filenameStyle']}`",
         f"- Total `.msg` files processed: `{summary['msgFileCount']}`",
         f"- Converted: `{summary['convertedCount']}`",
         f"- Failed tasks: `{event_summary['failedCount']}`",
         f"- Stage events: `{event_summary['stageEventCount']}`",
         f"- Pipelines: `{json.dumps(event_summary['pipelineCounts'], sort_keys=True)}`",
-        f"- Semantic validation: `{validation_summary['passedCount']} passed / {validation_summary['failedCount']} failed / {validation_summary['warningCaseCount']} warnings`",
+        f"- Semantic validation: {semantic_line}",
         "",
         "## Event Checks",
         "",
         f"- Missing terminal tasks: `{len(event_summary['missingTerminalTasks'])}`",
         f"- Order issues: `{len(event_summary['orderIssues'])}`",
         f"- Output names match pattern: `{event_summary['allOutputNamesMatchPattern']}`",
+        f"- Style mismatched outputs: `{len(event_summary['styleMismatchedOutputs'])}`",
         f"- Numeric suffix outputs: `{len(event_summary['numericSuffixOutputs'])}`",
         "",
         "## Case Results",
@@ -317,9 +357,17 @@ def run_browser_validation(
     base_url: str | None,
     timeout_seconds: float,
     render_strategy: str,
+    filename_style: str,
+    max_cases: int | None,
+    validate_outputs: bool,
 ) -> tuple[dict[str, Any], Path, Path]:
+    resolved_filename_style = normalize_filename_style(filename_style)
     case_pairs = discover_case_pairs(cases_dir)
+    if max_cases is not None:
+        case_pairs = case_pairs[: max(0, max_cases)]
     msg_file_count = len(case_pairs)
+    if not case_pairs:
+        raise RuntimeError(f"No .msg/.pdf case pairs were found in {cases_dir}.")
     run_stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     output_root = output_root.resolve()
     output_root.mkdir(parents=True, exist_ok=True)
@@ -383,7 +431,11 @@ def run_browser_validation(
                     upload_files.append(
                         ("files", (case_pair.msg_path.name, handle, "application/vnd.ms-outlook"))
                     )
-                upload_response = client.post(f"{resolved_base_url}/api/upload", files=upload_files)
+                upload_response = client.post(
+                    f"{resolved_base_url}/api/upload",
+                    data={"filename_style": resolved_filename_style},
+                    files=upload_files,
+                )
             upload_response.raise_for_status()
             upload_payload = upload_response.json()
             accepted_items = upload_payload["accepted"]
@@ -392,11 +444,35 @@ def run_browser_validation(
                     f"Expected {len(case_pairs)} accepted uploads but got {len(accepted_items)}."
                 )
 
+            preview_response = client.post(
+                f"{resolved_base_url}/api/filename-style-preview",
+                json={"filename_style": resolved_filename_style},
+            )
+            preview_response.raise_for_status()
+            preview_payload = preview_response.json()
+            preview_items = list(preview_payload.get("items", []))
+            preview_output_names = [
+                item["outputName"]
+                for item in preview_items
+                if isinstance(item, dict) and isinstance(item.get("outputName"), str)
+            ]
+            style_preview_mismatches = sorted(
+                name
+                for name in preview_output_names
+                if not _output_name_matches_style(name, filename_style=resolved_filename_style)
+            )
+            if style_preview_mismatches:
+                raise RuntimeError(
+                    f"Filename preview output did not match style '{resolved_filename_style}': "
+                    f"{style_preview_mismatches[:5]}"
+                )
+
             convert_response = client.post(
                 f"{resolved_base_url}/api/convert",
                 json={
                     "ids": [item["id"] for item in accepted_items],
                     "output_dir": str(generated_root),
+                    "filename_style": resolved_filename_style,
                 },
             )
             convert_response.raise_for_status()
@@ -410,7 +486,11 @@ def run_browser_validation(
 
         deadline = time.time() + timeout_seconds
         while time.time() < deadline:
-            event_summary = summarize_task_events(stream_events, expected_task_ids)
+            event_summary = summarize_task_events(
+                stream_events,
+                expected_task_ids,
+                filename_style=resolved_filename_style,
+            )
             if (
                 event_summary["completedCount"] + event_summary["failedCount"] >= len(expected_task_ids)
                 and not event_summary["missingTerminalTasks"]
@@ -422,12 +502,27 @@ def run_browser_validation(
 
         stop_requested.set()
         listener.join(timeout=2)
-        event_summary = summarize_task_events(stream_events, expected_task_ids)
-        validation_summary = validate_generated_outputs(
-            case_pairs=case_pairs,
-            case_by_task_id=case_by_task_id,
-            event_summary=event_summary,
+        event_summary = summarize_task_events(
+            stream_events,
+            expected_task_ids,
+            filename_style=resolved_filename_style,
         )
+        if validate_outputs:
+            validation_summary = validate_generated_outputs(
+                case_pairs=case_pairs,
+                case_by_task_id=case_by_task_id,
+                event_summary=event_summary,
+            )
+        else:
+            validation_summary = {
+                "caseCount": len(case_pairs),
+                "passedCount": 0,
+                "failedCount": 0,
+                "warningCaseCount": 0,
+                "infoCaseCount": 0,
+                "cases": [],
+                "skipped": True,
+            }
 
         summary: dict[str, Any] = {
             "generatedAt": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -437,9 +532,12 @@ def run_browser_validation(
             "host": host,
             "port": resolved_port,
             "renderStrategy": render_strategy,
+            "filenameStyle": resolved_filename_style,
             "goldenCorpusFileCount": sum(1 for _ in cases_dir.resolve().rglob("*") if _.is_file()),
             "msgFileCount": msg_file_count,
             "acceptedCount": len(accepted_items),
+            "previewedCount": len(preview_items),
+            "previewOutputNames": preview_output_names,
             "requestedCount": int(convert_payload.get("requestedCount", len(accepted_items))),
             "convertedCount": len(convert_payload.get("convertedFiles", [])),
             "conversionErrors": list(convert_payload.get("errors", [])),
@@ -498,6 +596,23 @@ def main(argv: list[str] | None = None) -> int:
         default=RENDER_STRATEGY_FIDELITY,
         help="Render strategy for the browser server when this command starts it (default: fidelity).",
     )
+    parser.add_argument(
+        "--filename-style",
+        choices=FILENAME_STYLES,
+        default=DEFAULT_FILENAME_STYLE,
+        help=f"Filename style to exercise through upload, preview, and convert (default: {DEFAULT_FILENAME_STYLE}).",
+    )
+    parser.add_argument(
+        "--max-cases",
+        type=int,
+        default=None,
+        help="Optional cap on corpus cases for focused batch stress runs.",
+    )
+    parser.add_argument(
+        "--skip-pdf-validation",
+        action="store_true",
+        help="Validate upload, preview, conversion completion, SSE events, and naming without semantic PDF comparison.",
+    )
     args = parser.parse_args(argv)
 
     summary, json_path, markdown_path = run_browser_validation(
@@ -508,18 +623,27 @@ def main(argv: list[str] | None = None) -> int:
         base_url=args.base_url,
         timeout_seconds=args.timeout_seconds,
         render_strategy=args.render_strategy,
+        filename_style=args.filename_style,
+        max_cases=args.max_cases,
+        validate_outputs=not args.skip_pdf_validation,
     )
     print(f"Wrote JSON report: {json_path}")
     print(f"Wrote Markdown report: {markdown_path}")
     print(
         f"Browser validation summary: processed={summary['msgFileCount']}, "
         f"converted={summary['convertedCount']}, "
+        f"filename_style={summary['filenameStyle']}, "
         f"event_failures={summary['eventSummary']['failedCount']}, "
         f"validator_failed={summary['validationSummary']['failedCount']}, "
-        f"validator_warnings={summary['validationSummary']['warningCaseCount']}"
+        f"validator_warnings={summary['validationSummary']['warningCaseCount']}, "
+        f"pdf_validation={'skipped' if summary['validationSummary'].get('skipped') else 'enabled'}"
     )
     if summary["eventSummary"]["failedCount"] or summary["eventSummary"]["missingTerminalTasks"]:
         return 1
+    if summary["eventSummary"]["styleMismatchedOutputs"]:
+        return 1
+    if summary["validationSummary"].get("skipped"):
+        return 0
     if summary["validationSummary"]["failedCount"]:
         return 2
     if summary["validationSummary"]["warningCaseCount"]:

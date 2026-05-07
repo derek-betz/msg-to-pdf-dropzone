@@ -29,3 +29,17 @@ jobs:
         shell: pwsh
         run: |
           python -m pytest
+
+      - name: Run browser golden corpus validation
+        shell: pwsh
+        run: |
+          python -m msg_to_pdf_dropzone.browser_validation --cases-dir .\emails-for-testing --output-root .\.local-browser-run --timeout-seconds 900
+
+      - name: Upload browser validation artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-validation-artifacts
+          path: .local-browser-run
+          if-no-files-found: ignore
+          retention-days: 14

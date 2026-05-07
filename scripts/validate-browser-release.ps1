@@ -24,6 +24,12 @@ if (-not (Test-Path $resolvedCasesDir)) {
 }
 
 $resolvedOutputRoot = Join-Path $repoRoot $OutputRoot
+$existingValidationDirs = @{}
+if (Test-Path $resolvedOutputRoot) {
+    Get-ChildItem -Path $resolvedOutputRoot -Directory -Filter "browser-validation-*" | ForEach-Object {
+        $existingValidationDirs[$_.FullName] = $true
+    }
+}
 
 Write-Host "Running unit and integration tests..."
 & $resolvedPythonPath -m pytest
@@ -40,7 +46,11 @@ if ($browserValidationExitCode -ne 0) {
 }
 
 if (-not $KeepArtifacts -and (Test-Path $resolvedOutputRoot)) {
-    Remove-Item $resolvedOutputRoot -Recurse -Force
+    Get-ChildItem -Path $resolvedOutputRoot -Directory -Filter "browser-validation-*" | Where-Object {
+        -not $existingValidationDirs.ContainsKey($_.FullName)
+    } | ForEach-Object {
+        Remove-Item $_.FullName -Recurse -Force
+    }
 }
 
 Write-Host "Release validation passed."

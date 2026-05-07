@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 from datetime import datetime, timezone
 from pathlib import Path
+import threading
 from types import SimpleNamespace
 
 import msg_to_pdf_dropzone.pdf_writer as pdf_writer
@@ -463,6 +464,31 @@ def test_print_web_document_via_edge_disables_pdf_headers_and_footers(
     assert any(part.startswith("--print-to-pdf=") for part in command)
 
 
+def test_print_web_document_via_edge_waits_for_delayed_output(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    input_path = tmp_path / "sample.html"
+    input_path.write_text("<html><body><p>Hello</p></body></html>", encoding="utf-8")
+    output_path = tmp_path / "sample.pdf"
+
+    monkeypatch.setattr(pdf_writer.os, "name", "nt", raising=False)
+    monkeypatch.setattr(
+        pdf_writer,
+        "_find_edge_executable",
+        lambda: Path("C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"),
+    )
+
+    def fake_run(_command: list[str], **_kwargs: object) -> SimpleNamespace:
+        timer = threading.Timer(0.05, lambda: output_path.write_bytes(b"%PDF-1.4\nfake\n"))
+        timer.start()
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(pdf_writer.subprocess, "run", fake_run)
+
+    assert pdf_writer._print_web_document_via_edge(input_path, output_path) is True
+
+
 def test_format_body_blocks_splits_on_blank_lines() -> None:
     result = _format_body_blocks("First paragraph.\n\nSecond paragraph.")
     assert result == ["First paragraph.", "Second paragraph."]
@@ -583,8 +609,8 @@ def test_estimate_data_uri_bytes_returns_zero_for_missing_comma() -> None:
 def test_format_sent_value_formats_utc_datetime() -> None:
     dt = datetime(2026, 3, 15, 10, 30, 0, tzinfo=timezone.utc)
     result = _format_sent_value(dt)
-    assert "2026-03-15" in result
-    assert "10:30:00" in result
+    expected = dt.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z").strip()
+    assert result == expected
 
 
 def test_build_email_html_document_renders_plain_body_when_no_html_body() -> None:

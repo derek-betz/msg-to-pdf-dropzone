@@ -60,6 +60,25 @@ def test_build_pdf_filename_prefixes_date_and_sanitizes_subject() -> None:
     assert file_name == "2026-02-20_Q1_ Planning _ Kickoff_.pdf"
 
 
+def test_build_pdf_filename_supports_non_engineering_styles() -> None:
+    latest_date = datetime(2026, 2, 20).date()
+
+    assert build_pdf_filename("Policy Update", latest_date, filename_style="subject") == "Policy Update.pdf"
+    assert (
+        build_pdf_filename("Policy Update", latest_date, filename_style="sender_subject", sender="Jane Smith")
+        == "Jane Smith_Policy Update.pdf"
+    )
+    assert (
+        build_pdf_filename("Policy Update", latest_date, filename_style="date_sender_subject", sender="Jane Smith")
+        == "2026-02-20_Jane Smith_Policy Update.pdf"
+    )
+
+
+def test_build_pdf_filename_falls_back_to_date_subject_for_unknown_style() -> None:
+    file_name = build_pdf_filename("Project Update", datetime(2026, 2, 20).date(), filename_style="custom")
+    assert file_name == "2026-02-20_Project Update.pdf"
+
+
 def test_sanitize_filename_part_defaults_when_empty() -> None:
     assert sanitize_filename_part("   ") == "No Subject"
 

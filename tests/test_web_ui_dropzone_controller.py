@@ -49,6 +49,7 @@ def test_dropzone_controller_event_contract(tmp_path: Path) -> None:
 
             const rafQueue = [];
             let rafId = 0;
+            const timeoutQueue = [];
             const timeoutIds = new Set();
             let timeoutId = 0;
 
@@ -105,36 +106,59 @@ def test_dropzone_controller_event_contract(tmp_path: Path) -> None:
               }};
             }}
 
+            const contexts = [];
+
             function makeContext() {{
               const gradient = {{ addColorStop() {{}} }};
-              return {{
-                setTransform() {{}},
+              const context = {{
+                _shadowBlur: 0,
+                maxShadowBlur: 0,
+                setTransformCalls: [],
+                ellipseCalls: 0,
+                arcCalls: 0,
+                lineToCalls: 0,
+                radialGradientCalls: 0,
+                linearGradientCalls: 0,
+                set shadowBlur(value) {{
+                  this._shadowBlur = value;
+                  this.maxShadowBlur = Math.max(this.maxShadowBlur, Number(value) || 0);
+                }},
+                get shadowBlur() {{
+                  return this._shadowBlur;
+                }},
+                setTransform(...args) {{ this.setTransformCalls.push(args); }},
                 clearRect() {{}},
                 save() {{}},
                 restore() {{}},
                 beginPath() {{}},
-                ellipse() {{}},
+                ellipse() {{ this.ellipseCalls += 1; }},
                 stroke() {{}},
                 fillRect() {{}},
-                createRadialGradient() {{ return gradient; }},
-                createLinearGradient() {{ return gradient; }},
+                createRadialGradient() {{ this.radialGradientCalls += 1; return gradient; }},
+                createLinearGradient() {{ this.linearGradientCalls += 1; return gradient; }},
                 moveTo() {{}},
-                lineTo() {{}},
+                lineTo() {{ this.lineToCalls += 1; }},
                 fill() {{}},
-                arc() {{}},
+                arc() {{ this.arcCalls += 1; }},
               }};
+              contexts.push(context);
+              return context;
             }}
 
             globalThis.window = {{
-              devicePixelRatio: 1,
+              devicePixelRatio: 3,
+              matchMedia() {{
+                return {{ matches: false }};
+              }},
               requestAnimationFrame(callback) {{
                 rafQueue.push(callback);
                 return ++rafId;
               }},
               cancelAnimationFrame() {{}},
-              setTimeout(_callback, _delay) {{
+              setTimeout(callback, delay = 0) {{
                 const id = ++timeoutId;
                 timeoutIds.add(id);
+                timeoutQueue.push({{ id, callback, delay }});
                 return id;
               }},
             }};
@@ -166,9 +190,17 @@ def test_dropzone_controller_event_contract(tmp_path: Path) -> None:
             let getAsFileCalled = false;
             let onDropCalled = false;
             let sourceHint = "";
+            const dragIntentHints = [];
+            let dragEnded = 0;
             const controller = createDropzoneController({{
               canvas,
               dropzone,
+              onDragIntent({{ sourceHint }}) {{
+                dragIntentHints.push(sourceHint);
+              }},
+              onDragEnd() {{
+                dragEnded += 1;
+              }},
               sourceHintFromDrop(dataTransfer) {{
                 return Array.from(dataTransfer.types || []).includes("OutlookItem") ? "outlook" : "upload";
               }},
@@ -180,22 +212,32 @@ def test_dropzone_controller_event_contract(tmp_path: Path) -> None:
               }},
             }});
 
-            const dragOver = makeEvent("dragover");
+            const dragOver = makeEvent("dragover", {{
+              dataTransfer: {{ types: ["Files", "OutlookItem"] }},
+            }});
             dropzone.dispatchEvent(dragOver);
             assert.equal(dragOver.defaultPrevented, true);
             assert.equal(dropzone.classList.contains("is-dragover"), true);
+            assert.equal(dropzone.classList.contains("is-drop-primed"), true);
             assert.equal(dropzone.classList.contains("is-drop-splash"), false);
+            assert.deepEqual(dragIntentHints, ["outlook"]);
 
             dropzone.dispatchEvent(makeEvent("dragleave", {{ clientX: 100, clientY: 100 }}));
             assert.equal(dropzone.classList.contains("is-dragover"), true);
+            assert.equal(dropzone.classList.contains("is-drop-primed"), true);
+            assert.equal(dragEnded, 0);
 
             dropzone.dispatchEvent(makeEvent("dragleave", {{ clientX: 1, clientY: 1 }}));
             assert.equal(dropzone.classList.contains("is-dragover"), false);
+            assert.equal(dropzone.classList.contains("is-drop-primed"), false);
+            assert.equal(dragEnded, 1);
 
             assert.equal(isPointerInsideElement(makeEvent("dragover", {{ clientX: 11, clientY: 11 }}), dropzone), true);
             assert.equal(isPointerInsideElement(makeEvent("dragover", {{ clientX: 9, clientY: 11 }}), dropzone), false);
 
-            dropzone.dispatchEvent(makeEvent("dragover"));
+            dropzone.dispatchEvent(makeEvent("dragover", {{
+              dataTransfer: {{ types: ["Files", "OutlookItem"] }},
+            }}));
             const drop = makeEvent("drop", {{
               dataTransfer: {{
                 types: ["Files", "OutlookItem"],
@@ -216,20 +258,35 @@ def test_dropzone_controller_event_contract(tmp_path: Path) -> None:
             assert.equal(drop.defaultPrevented, true);
             assert.equal(drop.propagationStopped, true);
             assert.equal(dropzone.classList.contains("is-dragover"), false);
+            assert.equal(dropzone.classList.contains("is-drop-primed"), false);
             assert.equal(dropzone.classList.contains("is-drop-splash"), true);
             assert.equal(getAsFileCalled, true);
-            assert.equal(onDropCalled, false);
+            assert.equal(onDropCalled, true);
+            assert.equal(sourceHint, "outlook");
+            assert.equal(canvas.width, 675);
+            assert.equal(canvas.height, 405);
+            const rippleContext = contexts.find((context) => context.setTransformCalls.length);
+            assert.ok(rippleContext);
+            assert.equal(rippleContext.setTransformCalls[0][0], 1.35);
 
             let fakeNow = performance.now();
             while (rafQueue.length) {{
               const callback = rafQueue.shift();
               fakeNow += 80;
               callback(fakeNow);
+              while (timeoutQueue.some((timer) => timer.delay === 0 && timeoutIds.has(timer.id))) {{
+                const timerIndex = timeoutQueue.findIndex((timer) => timer.delay === 0 && timeoutIds.has(timer.id));
+                const timer = timeoutQueue.splice(timerIndex, 1)[0];
+                timeoutIds.delete(timer.id);
+                timer.callback();
+              }}
               await Promise.resolve();
             }}
             await Promise.resolve();
-            assert.equal(onDropCalled, true);
-            assert.equal(sourceHint, "outlook");
+            assert.ok(rippleContext.maxShadowBlur <= 10, `max shadowBlur was ${{rippleContext.maxShadowBlur}}`);
+            assert.ok(rippleContext.ellipseCalls <= 70, `ellipse calls were ${{rippleContext.ellipseCalls}}`);
+            assert.ok(rippleContext.arcCalls <= 100, `arc calls were ${{rippleContext.arcCalls}}`);
+            assert.ok(rippleContext.lineToCalls <= 60, `lineTo calls were ${{rippleContext.lineToCalls}}`);
 
             const outsideDragOver = makeEvent("dragover");
             document.dispatchEvent(outsideDragOver);

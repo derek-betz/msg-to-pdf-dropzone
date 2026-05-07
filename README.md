@@ -8,7 +8,7 @@ Windows-local browser app for converting Outlook `.msg` files into clean PDFs wi
 - Accepts dragged `.msg` files, manual browser uploads, or a Classic Outlook selection import.
 - Keeps a local queue, a native output-folder chooser, and a live status log.
 - Drives an embedded mailroom companion from the real task event stream.
-- Converts each email to one PDF named `YYYY-MM-DD_<email subject>.pdf`, using the latest thread date.
+- Converts each email to one PDF using a user-selected filename style, including project-record date prefixes and people-focused sender prefixes.
 
 ## Requirements
 
@@ -59,7 +59,9 @@ The browser UI is the primary app surface. It includes:
 - drag/drop `.msg` upload and manual file add
 - Classic Outlook selection import
 - native output-folder chooser
+- filename style selection with live output-name preview
 - conversion queue controls
+- completed-batch review with row-level `Show` actions for saved PDFs
 - live server-sent task events
 - embedded mailroom companion and preview flow
 
@@ -135,6 +137,38 @@ By default this starts a temporary local browser server on a free localhost port
 
 The browser validation command starts the server in `fidelity` mode by default, so it exercises the real Outlook-first pipeline unless you explicitly override it with `--render-strategy fast`.
 
+For a focused UX batch check after changing queue or naming behavior, cap the corpus and exercise a non-default filename style:
+
+```powershell
+.\.venv\Scripts\python.exe -m msg_to_pdf_dropzone.browser_validation --cases-dir .\emails-for-testing --max-cases 12 --filename-style sender_subject --render-strategy fast --skip-pdf-validation
+```
+
+To run a rendered UI workflow in a real browser, start a controlled server-managed output session:
+
+```powershell
+.\scripts\start-rendered-ui-workflow.ps1 -MaxCases 4 -FilenameStyle sender_subject
+```
+
+The script writes a manifest under `.local-browser-run\rendered-ui-workflow-<timestamp>\manifest.json` with the URL, test files, selectors, and expected result text for Browser Use or Playwright-driven checks.
+
+## Release readiness checklist
+
+Before distributing a beta build, run these checks from a clean shell:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest
+.\scripts\validate-browser-release.ps1
+.\scripts\start-rendered-ui-workflow.ps1 -MaxCases 4 -FilenameStyle sender_subject
+```
+
+Then verify the rendered workflow in a browser:
+
+- upload or seed the manifest `.msg` files
+- switch filename styles and confirm queued output names update
+- convert the batch and confirm the progress bar reaches completion smoothly
+- click a saved-row `Show` action and confirm the PDF is revealed in Explorer
+- click `Start New Batch` and confirm the queue resets cleanly
+
 ## Profile the local corpus
 
 Run a local corpus profile against `emails-for-testing` and generate JSON + Markdown summaries:
@@ -193,7 +227,7 @@ This is intended for local debugging, event-stream inspection, and regression an
 
 - Maximum input files per batch is 25.
 - Filenames are sanitized for Windows.
-- Queue preview names are server-provided and intentionally use the latest sent date in each normalized email thread. See `docs/web-dropzone-contract.md`.
+- Queue preview names are server-provided and update when the filename style changes. Date-based styles intentionally use the latest sent date in each normalized email thread. See `docs/web-dropzone-contract.md`.
 - If multiple outputs would have the same name, a numeric suffix is added.
 - Outlook drag handling uses COM to export selected items to temporary `.msg` files when direct file paths are not provided.
 - PDF generation now defaults to the HTML-to-PDF Edge path, then falls back to the built-in renderer. Set `MSG_TO_PDF_RENDER_STRATEGY=fidelity` to opt into the Outlook MHTML + Edge path first.

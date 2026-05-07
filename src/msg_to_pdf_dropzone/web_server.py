@@ -30,7 +30,7 @@ from .feedback import list_feedback_entries, record_feedback, send_feedback_emai
 from .msg_parser import parse_msg_file
 from .outlook_selection import extract_selected_outlook_messages
 from .task_events import TaskEvent, TaskMetaValue, build_batch_meta_for_paths, default_task_id_for_path, emit_task_event
-from .thread_logic import build_pdf_filename, get_latest_thread_dates
+from .thread_logic import DEFAULT_FILENAME_STYLE, build_pdf_filename, get_latest_thread_dates, normalize_filename_style
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 WEB_UI_DIR = PACKAGE_ROOT / "web_ui"
@@ -306,7 +306,8 @@ class StageStore:
             if output_path is not None:
                 item.output_path = output_path
 
-    def refresh_output_previews(self) -> None:
+    def refresh_output_previews(self, *, filename_style: str | None = DEFAULT_FILENAME_STYLE) -> None:
+        resolved_style = normalize_filename_style(filename_style)
         with self._lock:
             items = [item for item in self._items.values() if item.stage != "complete"]
 
@@ -332,7 +333,12 @@ class StageStore:
                 latest_date = latest_thread_dates.get(record.thread_key)
                 if latest_date is None:
                     continue
-                item.output_name = build_pdf_filename(record.subject, latest_date)
+                item.output_name = build_pdf_filename(
+                    record.subject,
+                    latest_date,
+                    filename_style=resolved_style,
+                    sender=record.sender,
+                )
 
     def _register(self, path: Path, *, name: str, source: str) -> StagedFile:
         item = StagedFile(
@@ -370,10 +376,19 @@ class RemoveRequest(BaseModel):
 class ConvertRequest(BaseModel):
     ids: list[str]
     output_dir: str | None = None
+    filename_style: str = DEFAULT_FILENAME_STYLE
+
+
+class FilenameStyleRequest(BaseModel):
+    filename_style: str = DEFAULT_FILENAME_STYLE
 
 
 class OpenOutputFolderRequest(BaseModel):
     output_dir: str | None = None
+
+
+class RevealOutputFileRequest(BaseModel):
+    output_path: str | None = None
 
 
 class PreviewRequest(BaseModel):
@@ -420,6 +435,21 @@ def open_output_directory(path_value: str) -> bool:
     except OSError:
         return False
     return True
+
+
+def reveal_output_file(path_value: str) -> bool:
+    target = Path(path_value).expanduser()
+    if target.suffix.lower() != ".pdf" or not target.exists() or not target.is_file():
+        return False
+
+    if os.name == "nt":
+        try:
+            subprocess.Popen(["explorer.exe", f"/select,{target}"])
+        except OSError:
+            return False
+        return True
+
+    return open_output_directory(str(target.parent))
 
 
 def build_batch_meta(items: list[StagedFile]) -> dict[Path, dict[str, TaskMetaValue]]:
@@ -686,13 +716,18 @@ def create_app() -> FastAPI:
         return {"items": stage_store.snapshot(), "maxFiles": MAX_FILES_PER_BATCH}
 
     @app.post("/api/upload")
-    async def upload(files: list[UploadFile] = File(...), source_hint: str = Form("upload")) -> dict[str, object]:
+    async def upload(
+        files: list[UploadFile] = File(...),
+        source_hint: str = Form("upload"),
+        filename_style: str = Form(DEFAULT_FILENAME_STYLE),
+    ) -> dict[str, object]:
         stage_store: StageStore = app.state.stage_store
         event_broker: EventBroker = app.state.event_broker
         queued_before = stage_store.active_count()
         normalized_source = "outlook" if source_hint == "outlook" else "upload"
         staged = await stage_store.stage_uploads(files, source=normalized_source)
-        await asyncio.to_thread(stage_store.refresh_output_previews)
+        resolved_filename_style = normalize_filename_style(filename_style)
+        await asyncio.to_thread(stage_store.refresh_output_previews, filename_style=resolved_filename_style)
         batch_meta = build_batch_meta(staged)
         for item in staged:
             meta = batch_meta[item.path.resolve()]
@@ -715,6 +750,13 @@ def create_app() -> FastAPI:
             "accepted": [item.to_dict() for item in staged],
             "rejectedCount": rejected_count,
         }
+
+    @app.post("/api/filename-style-preview")
+    async def filename_style_preview(request: FilenameStyleRequest) -> dict[str, object]:
+        stage_store: StageStore = app.state.stage_store
+        resolved_filename_style = normalize_filename_style(request.filename_style)
+        await asyncio.to_thread(stage_store.refresh_output_previews, filename_style=resolved_filename_style)
+        return {"items": stage_store.snapshot(), "filenameStyle": resolved_filename_style}
 
     @app.post("/api/import-outlook")
     async def import_outlook() -> dict[str, object]:
@@ -777,6 +819,16 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="The selected output folder is unavailable.")
         return {"ok": True, "outputDir": output_dir}
 
+    @app.post("/api/reveal-output-file")
+    async def reveal_output_file_endpoint(request: RevealOutputFileRequest) -> dict[str, object]:
+        output_path = (request.output_path or "").strip()
+        if not output_path:
+            raise HTTPException(status_code=400, detail="Choose a saved PDF before opening it.")
+        opened = await asyncio.to_thread(reveal_output_file, output_path)
+        if not opened:
+            raise HTTPException(status_code=404, detail="The selected PDF is unavailable.")
+        return {"ok": True, "outputPath": output_path}
+
     @app.post("/api/preview-mailroom")
     async def preview_mailroom(request: PreviewRequest) -> dict[str, object]:
         event_broker: EventBroker = app.state.event_broker
@@ -814,6 +866,7 @@ def create_app() -> FastAPI:
             event_sink=publish_task_event,
             task_ids_by_source_path=task_ids_by_source_path,
             batch_meta_by_source_path=batch_meta,
+            filename_style=normalize_filename_style(request.filename_style),
         )
         if result.converted_files:
             event_broker.publish_status(kind="status", message=f"Converted {len(result.converted_files)} of {result.requested_count} file(s).")

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Email-PDF Converter</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect width='48' height='48' rx='10' fill='%23120f0b'/%3E%3Cpath d='M9 14.5 24 25 39 14.5v20H9z' fill='%23f2b764'/%3E%3Cpath d='M10.5 13h27L24 24z' fill='%23ffd89b'/%3E%3Crect x='25' y='26' width='15' height='10' rx='2' fill='%2320150c'/%3E%3Ctext x='32.5' y='33.2' text-anchor='middle' font-size='5.6' font-family='Arial' font-weight='700' fill='%23f2b764'%3EPDF%3C/text%3E%3C/svg%3E">
-    <link rel="stylesheet" href="/static/app.css?v=dropzone-contract-1">
+    <link rel="stylesheet" href="/static/app.css?v=filename-panel-1">
   </head>
   <body>
     <div class="shell">
@@ -43,8 +43,8 @@
       <main class="app-shell">
         <div class="primary-column">
           <section class="drop-workspace">
-            <label class="dropzone dropzone-intake" id="dropzone" for="file-input">
-              <input id="file-input" type="file" accept=".msg" multiple hidden>
+            <label class="dropzone dropzone-intake" id="dropzone" data-testid="dropzone" for="file-input">
+              <input id="file-input" data-testid="file-input" type="file" accept=".msg" multiple hidden>
               <span class="dropzone-visual" aria-hidden="true">
                 <span class="drop-glow"></span>
                 <span class="drop-ring ring-one"></span>
@@ -90,7 +90,29 @@
             </label>
           </section>
 
-          <section class="queue-panel">
+          <section class="filename-style-panel" data-testid="filename-style-panel" aria-labelledby="filename-style-heading">
+            <div class="filename-style-panel-copy">
+              <p class="section-label" id="filename-style-heading">Filename Style</p>
+              <strong>Choose how each PDF will be named</strong>
+              <span>Pick the format before converting. Queued filenames update automatically.</span>
+            </div>
+            <label class="filename-style-control">
+              <span class="filename-style-field-label">Style</span>
+              <select id="filename-style-select" data-testid="filename-style-select">
+                <option value="date_subject">Project records: Date + subject</option>
+                <option value="subject">Office files: Subject only</option>
+                <option value="sender_subject">People-focused: Sender + subject</option>
+                <option value="date_sender_subject">Audit trail: Date + sender + subject</option>
+              </select>
+              <small id="filename-style-detail">Best for project correspondence that will be combined newest-first.</small>
+              <div class="filename-style-example" aria-live="polite">
+                <span>Example output</span>
+                <strong id="filename-style-example-value" data-testid="filename-style-example">2026-05-07_Project Update.pdf</strong>
+              </div>
+            </label>
+          </section>
+
+          <section class="queue-panel" data-testid="conversion-queue">
             <div class="panel-header">
               <div>
                 <p class="section-label">Conversion Queue</p>
@@ -109,7 +131,7 @@
               </div>
             </div>
 
-            <div class="queue-table" id="queue-list" hidden></div>
+            <div class="queue-table" id="queue-list" data-testid="queue-list" hidden></div>
           </section>
         </div>
 
@@ -142,21 +164,38 @@
                 <strong id="batch-progress-headline">No files in progress</strong>
                 <span id="batch-progress-detail">Add files to see the live conversion timeline.</span>
               </div>
-              <div class="batch-progress-track" aria-hidden="true">
+            <div class="batch-progress-track" id="batch-progress-track" data-testid="batch-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-describedby="batch-progress-detail">
                 <span class="batch-progress-fill" id="batch-progress-fill"></span>
               </div>
             </div>
             <span class="batch-status-pill" id="batch-status-pill">Ready</span>
           </section>
 
-          <section class="rail-card save-card">
+          <section class="rail-card save-card" data-testid="save-card">
             <div class="rail-heading">
               <span class="folder-icon" aria-hidden="true"></span>
               <p class="section-label">Output Folder</p>
             </div>
             <strong class="destination-inline-value" id="destination-inline-value">Choose a destination when you convert.</strong>
+            <div class="readiness-list" aria-label="Batch readiness" aria-live="polite">
+              <div class="readiness-step is-needed" id="readiness-files">
+                <span class="readiness-dot" aria-hidden="true"></span>
+                <span class="readiness-label">Files</span>
+                <strong id="readiness-files-value">Waiting</strong>
+              </div>
+              <div class="readiness-step is-pending" id="readiness-destination">
+                <span class="readiness-dot" aria-hidden="true"></span>
+                <span class="readiness-label">Folder</span>
+                <strong id="readiness-destination-value">Choose later</strong>
+              </div>
+              <div class="readiness-step is-pending" id="readiness-conversion">
+                <span class="readiness-dot" aria-hidden="true"></span>
+                <span class="readiness-label">PDFs</span>
+                <strong id="readiness-conversion-value">Not started</strong>
+              </div>
+            </div>
             <div class="save-actions">
-              <button class="button button-primary" id="convert-button" type="button">Convert to PDF</button>
+              <button class="button button-primary" id="convert-button" data-testid="convert-button" type="button">Convert to PDF</button>
               <button class="button button-outline result-action" id="open-output-folder-button" type="button" hidden>
                 <span class="button-icon folder-open-icon" aria-hidden="true"></span>
                 Open Output Folder
@@ -174,18 +213,60 @@
             </section>
           </section>
 
-          <section class="rail-card timeline-card">
-            <div class="rail-heading">
-              <span class="clock-icon" aria-hidden="true"></span>
-              <p class="section-label">Conversion Timeline</p>
-            </div>
-            <div class="timeline-list" id="timeline-list">
-              <div class="timeline-row is-active">
-                <span class="timeline-time">Now</span>
-                <span class="timeline-dot"></span>
-                <span class="timeline-copy">Queue idle. Waiting for files.</span>
+          <section class="rail-card result-banner" id="result-banner" data-testid="result-banner" role="status" aria-live="polite" hidden>
+            <div class="result-hero">
+              <span class="result-medallion" id="result-medallion" aria-hidden="true"></span>
+              <div class="result-copy">
+                <p class="section-label">Batch Result</p>
+                <h3 id="result-headline" data-testid="result-headline">Batch complete</h3>
+                <p class="result-detail" id="result-detail">Every queued email has been converted successfully.</p>
               </div>
             </div>
+            <div class="result-stats" aria-label="Conversion result summary">
+              <div class="result-stat">
+                <span>Saved</span>
+                <strong class="result-stat-value" id="result-saved">0</strong>
+              </div>
+              <div class="result-stat">
+                <span>Needs Retry</span>
+                <strong class="result-stat-value" id="result-failed">0</strong>
+              </div>
+            </div>
+            <div class="result-review" id="result-review" hidden>
+              <div class="result-review-head">
+                <span class="section-label">Batch Review</span>
+                <strong id="result-review-destination">Destination pending</strong>
+              </div>
+              <div class="result-review-list" id="result-review-list" aria-label="Converted PDF review"></div>
+            </div>
+            <p class="result-guidance" id="result-guidance">Open the output folder to review the PDFs.</p>
+            <div class="result-actions">
+              <button class="button button-primary" id="result-open-output-button" type="button" hidden>
+                <span class="button-icon folder-open-icon" aria-hidden="true"></span>
+                Open Output Folder
+              </button>
+              <button class="button button-outline" id="result-retry-failed-button" type="button" hidden>Retry Failed</button>
+              <button class="button button-minimal" id="result-start-new-button" type="button">Start New Batch</button>
+            </div>
+          </section>
+
+          <section class="rail-card timeline-card">
+            <details class="timeline-details">
+              <summary class="timeline-summary">
+                <span class="clock-icon" aria-hidden="true"></span>
+                <span class="timeline-summary-copy">
+                  <span class="section-label">Conversion Timeline</span>
+                  <strong>Technical details</strong>
+                </span>
+              </summary>
+              <div class="timeline-list" id="timeline-list">
+                <div class="timeline-row is-active">
+                  <span class="timeline-time">Now</span>
+                  <span class="timeline-dot"></span>
+                  <span class="timeline-copy">Queue idle. Waiting for files.</span>
+                </div>
+              </div>
+            </details>
           </section>
         </aside>
       </main>
@@ -214,7 +295,7 @@
           <article class="tutorial-card">
             <span class="flow-step">3</span>
             <strong>Review the results</strong>
-            <p>Watch each message become a PDF and retry only the exceptions.</p>
+            <p>Watch each message become a PDF and retry only the failed files.</p>
           </article>
         </div>
       </section>
@@ -261,6 +342,6 @@
       </section>
     </div>
 
-    <script type="module" src="/static/app.js?v=dropzone-contract-1"></script>
+    <script type="module" src="/static/app.js?v=result-row-actions-2"></script>
   </body>
 </html>

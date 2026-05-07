@@ -12,7 +12,7 @@ import tempfile
 from datetime import datetime
 from html import escape, unescape
 from pathlib import Path
-from time import perf_counter
+from time import perf_counter, sleep
 
 from reportlab.lib.pagesizes import LETTER
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
@@ -41,6 +41,7 @@ RENDER_STRATEGY_FIDELITY = "fidelity"
 RENDER_STRATEGY_FAST = "fast"
 REMOTE_IMAGE_SCHEMES = ("http://", "https://")
 INLINE_IMAGE_HTML_PREFERENCE_BYTES = 30 * 1024
+EDGE_PRINT_OUTPUT_WAIT_SECONDS = 20.0
 
 
 @dataclass(slots=True)
@@ -462,12 +463,26 @@ def _find_edge_executable() -> Path | None:
     return None
 
 
+def _wait_for_printed_pdf(output_path: Path, *, timeout_seconds: float = EDGE_PRINT_OUTPUT_WAIT_SECONDS) -> bool:
+    deadline = perf_counter() + timeout_seconds
+    while perf_counter() < deadline:
+        try:
+            if output_path.exists() and output_path.stat().st_size > 0:
+                return True
+        except OSError:
+            pass
+        sleep(0.05)
+    return False
+
+
 def _print_web_document_via_edge(input_path: Path, output_path: Path) -> bool:
     if os.name != "nt":
         return False
 
     edge_path = _find_edge_executable()
     if edge_path is None:
+        return False
+    if not input_path.exists():
         return False
 
     uri = "file:///" + str(input_path.resolve()).replace("\\", "/")
@@ -486,7 +501,7 @@ def _print_web_document_via_edge(input_path: Path, output_path: Path) -> bool:
         result = subprocess.run(command, capture_output=True, text=True, timeout=120, check=False)
         if result.returncode != 0:
             return False
-        return output_path.exists() and output_path.stat().st_size > 0
+        return _wait_for_printed_pdf(output_path)
     except Exception:
         return False
 

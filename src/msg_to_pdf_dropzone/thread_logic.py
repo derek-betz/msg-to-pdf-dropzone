@@ -3,11 +3,20 @@ from __future__ import annotations
 import re
 from datetime import date, datetime, tzinfo
 from pathlib import Path
+from typing import Literal
 
 from .models import EmailRecord
 
 INVALID_FILENAME_CHARS = re.compile(r"[<>:\"/\\|?*\x00-\x1F]")
 THREAD_PREFIX_PATTERN = re.compile(r"^\s*((re|fw|fwd)\s*:\s*)+", re.IGNORECASE)
+FilenameStyle = Literal["date_subject", "subject", "sender_subject", "date_sender_subject"]
+DEFAULT_FILENAME_STYLE: FilenameStyle = "date_subject"
+FILENAME_STYLES: tuple[FilenameStyle, ...] = (
+    "date_subject",
+    "subject",
+    "sender_subject",
+    "date_sender_subject",
+)
 
 
 def normalize_thread_subject(subject: str) -> str:
@@ -45,8 +54,29 @@ def sanitize_filename_part(value: str, max_length: int = 120) -> str:
     return candidate[:max_length].rstrip(" .")
 
 
-def build_pdf_filename(subject: str, thread_latest_date: date) -> str:
+def normalize_filename_style(value: str | None) -> FilenameStyle:
+    candidate = (value or "").strip().lower()
+    if candidate in FILENAME_STYLES:
+        return candidate  # type: ignore[return-value]
+    return DEFAULT_FILENAME_STYLE
+
+
+def build_pdf_filename(
+    subject: str,
+    thread_latest_date: date,
+    *,
+    filename_style: str | None = DEFAULT_FILENAME_STYLE,
+    sender: str = "",
+) -> str:
+    style = normalize_filename_style(filename_style)
     safe_subject = sanitize_filename_part(subject)
+    safe_sender = sanitize_filename_part(sender or "Unknown Sender", max_length=70)
+    if style == "subject":
+        return f"{safe_subject}.pdf"
+    if style == "sender_subject":
+        return f"{safe_sender}_{safe_subject}.pdf"
+    if style == "date_sender_subject":
+        return f"{thread_latest_date:%Y-%m-%d}_{safe_sender}_{safe_subject}.pdf"
     return f"{thread_latest_date:%Y-%m-%d}_{safe_subject}.pdf"
 
 

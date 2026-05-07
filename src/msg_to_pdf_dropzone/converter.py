@@ -96,6 +96,7 @@ def convert_msg_files(
     event_sink: TaskEventSink | None = None,
     task_ids_by_source_path: Mapping[Path, str] | None = None,
     batch_meta_by_source_path: Mapping[Path, Mapping[str, TaskMetaValue]] | None = None,
+    filename_style: str | None = None,
 ) -> ConversionResult:
     started_at = perf_counter()
     result = ConversionResult(requested_count=len(msg_paths))
@@ -173,7 +174,12 @@ def convert_msg_files(
         event_meta = _resolve_event_meta(record.source_path, batch_meta_by_source_path)
         try:
             naming_started_at = perf_counter()
-            file_name = build_pdf_filename(record.subject, latest_thread_dates[record.thread_key])
+            file_name = build_pdf_filename(
+                record.subject,
+                latest_thread_dates[record.thread_key],
+                filename_style=filename_style,
+                sender=record.sender,
+            )
             output_path = make_unique_path(output_dir / file_name)
             naming_seconds = perf_counter() - naming_started_at
             emit_task_event(

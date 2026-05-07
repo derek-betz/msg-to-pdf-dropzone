@@ -1,76 +1,100 @@
-import { createDropzoneController } from "./dropzone_controller.js?v=dropzone-contract-1";
+import { createDropzoneController } from "./dropzone_controller.js?v=filename-panel-1";
 
 const QUEUE_STAGE_PROGRESS = {
+  drop_received: {
+    label: "Received",
+    floor: 3,
+    cap: 6,
+    baseRate: 10,
+    easeRate: 0.28,
+    tone: "queued",
+  },
+  outlook_extract_started: {
+    label: "Importing",
+    floor: 5,
+    cap: 10,
+    baseRate: 8,
+    easeRate: 0.22,
+    tone: "queued",
+  },
+  files_accepted: {
+    label: "Ready",
+    floor: 8,
+    cap: 12,
+    baseRate: 7,
+    easeRate: 0.2,
+    tone: "queued",
+  },
   output_folder_selected: {
     label: "Starting",
-    floor: 4,
-    cap: 12,
-    baseRate: 18,
+    floor: 8,
+    cap: 18,
+    baseRate: 22,
     easeRate: 0.32,
     tone: "active",
   },
   parse_started: {
     label: "Preparing",
-    floor: 12,
-    cap: 28,
-    baseRate: 10,
-    easeRate: 0.24,
+    floor: 18,
+    cap: 38,
+    baseRate: 13,
+    easeRate: 0.28,
     tone: "active",
   },
   filename_built: {
     label: "Naming",
-    floor: 24,
-    cap: 42,
-    baseRate: 8,
-    easeRate: 0.18,
+    floor: 36,
+    cap: 54,
+    baseRate: 10,
+    easeRate: 0.22,
     tone: "active",
   },
   pdf_pipeline_started: {
     label: "Loading",
-    floor: 38,
-    cap: 58,
-    baseRate: 7,
-    easeRate: 0.15,
+    floor: 52,
+    cap: 74,
+    baseRate: 12,
+    easeRate: 0.24,
     tone: "active",
   },
   pipeline_selected: {
-    label: "Creating PDF",
-    floor: 54,
-    cap: 84,
-    baseRate: 2.4,
-    easeRate: 0.08,
+    label: "Rendering PDF",
+    floor: 74,
+    cap: 97,
+    baseRate: 17,
+    easeRate: 0.34,
     tone: "active",
   },
   pdf_written: {
     label: "PDF ready",
-    floor: 82,
-    cap: 93,
-    baseRate: 5.2,
-    easeRate: 0.18,
+    floor: 97,
+    cap: 99,
+    baseRate: 10,
+    easeRate: 0.3,
     tone: "active",
   },
   deliver_started: {
     label: "Saving",
-    floor: 92,
-    cap: 98,
-    baseRate: 3.6,
-    easeRate: 0.22,
+    floor: 99,
+    cap: 99.4,
+    baseRate: 8,
+    easeRate: 0.35,
     tone: "active",
   },
   complete: {
     label: "Saved",
     floor: 100,
     cap: 100,
-    baseRate: 1,
-    easeRate: 1,
+    baseRate: 55,
+    easeRate: 0.5,
     tone: "complete",
   },
   failed: {
     label: "Failed",
     floor: 100,
     cap: 100,
-    baseRate: 1,
-    easeRate: 1,
+    baseRate: 55,
+    easeRate: 0.5,
     tone: "failed",
   },
 };
@@ -89,10 +113,31 @@ const STAGE_LABELS = {
   complete: "Saved",
   failed: "Needs attention",
 };
+const TERMINAL_STAGES = new Set(["complete", "failed"]);
 
 const DEFAULT_DROP_COPY = "Supports Outlook drags and .msg files. Click to browse if you prefer.";
 const SERVER_DROP_COPY = "Supports .msg files. Click to browse if you prefer.";
 const RECENT_DESTINATIONS_KEY = "msg-to-pdf-dropzone.recent-destinations";
+const FILENAME_STYLE_KEY = "msg-to-pdf-dropzone.filename-style";
+const DEFAULT_FILENAME_STYLE = "date_subject";
+const FILENAME_STYLE_OPTIONS = {
+  date_subject: {
+    detail: "Best for project correspondence that will be combined newest-first.",
+    example: "2026-05-07_Project Update.pdf",
+  },
+  subject: {
+    detail: "Best when the subject is the easiest way to recognize each PDF.",
+    example: "Project Update.pdf",
+  },
+  sender_subject: {
+    detail: "Best when the person who sent the email matters more than the date.",
+    example: "Jane Smith_Project Update.pdf",
+  },
+  date_sender_subject: {
+    detail: "Best when each PDF needs date, sender, and subject in the filename.",
+    example: "2026-05-07_Jane Smith_Project Update.pdf",
+  },
+};
 const TIMELINE_STAGES = [
   { key: "files_accepted", label: "Files queued and ready" },
   { key: "parse_started", label: "Preparing and reading messages" },
@@ -122,6 +167,8 @@ const state = {
   tutorialOpen: false,
   feedbackOpen: false,
   latestStatus: null,
+  filenameStyle: DEFAULT_FILENAME_STYLE,
+  queueDetailsExpanded: false,
   serverMode: false,
   capabilities: {
     nativeOutputPicker: true,
@@ -133,6 +180,7 @@ const elements = {
   batchProgressDetail: document.getElementById("batch-progress-detail"),
   batchProgressFill: document.getElementById("batch-progress-fill"),
   batchProgressHeadline: document.getElementById("batch-progress-headline"),
+  batchProgressTrack: document.getElementById("batch-progress-track"),
   batchStatusPill: document.getElementById("batch-status-pill"),
   chooseFolderButton: document.getElementById("choose-folder-button"),
   clearButton: document.getElementById("clear-button"),
@@ -154,6 +202,9 @@ const elements = {
   feedbackMessage: document.getElementById("feedback-message"),
   feedbackModal: document.getElementById("feedback-modal"),
   feedbackSend: document.getElementById("feedback-send"),
+  filenameStyleDetail: document.getElementById("filename-style-detail"),
+  filenameStyleExampleValue: document.getElementById("filename-style-example-value"),
+  filenameStyleSelect: document.getElementById("filename-style-select"),
   helperRow: document.getElementById("helper-row"),
   historyList: document.getElementById("history-list"),
   historyStrip: document.getElementById("history-strip"),
@@ -168,11 +219,25 @@ const elements = {
   queueEmpty: document.getElementById("queue-empty"),
   queueList: document.getElementById("queue-list"),
   queuePanel: document.querySelector(".queue-panel"),
+  readinessConversion: document.getElementById("readiness-conversion"),
+  readinessConversionValue: document.getElementById("readiness-conversion-value"),
+  readinessDestination: document.getElementById("readiness-destination"),
+  readinessDestinationValue: document.getElementById("readiness-destination-value"),
+  readinessFiles: document.getElementById("readiness-files"),
+  readinessFilesValue: document.getElementById("readiness-files-value"),
   resultBanner: document.getElementById("result-banner"),
   resultDetail: document.getElementById("result-detail"),
   resultFailed: document.getElementById("result-failed"),
+  resultGuidance: document.getElementById("result-guidance"),
   resultHeadline: document.getElementById("result-headline"),
+  resultOpenOutputButton: document.getElementById("result-open-output-button"),
+  resultReview: document.getElementById("result-review"),
+  resultReviewDestination: document.getElementById("result-review-destination"),
+  resultReviewList: document.getElementById("result-review-list"),
+  resultRetryFailedButton: document.getElementById("result-retry-failed-button"),
   resultSaved: document.getElementById("result-saved"),
+  resultStartNewButton: document.getElementById("result-start-new-button"),
+  saveCard: document.querySelector(".save-card"),
   shell: document.querySelector(".shell"),
   simpleStatus: document.getElementById("simple-status"),
   statusDetail: document.getElementById("status-detail"),
@@ -216,6 +281,26 @@ function saveRecentDestinations() {
   }
 }
 
+function normalizeFilenameStyle(value) {
+  return Object.prototype.hasOwnProperty.call(FILENAME_STYLE_OPTIONS, value) ? value : DEFAULT_FILENAME_STYLE;
+}
+
+function loadFilenameStyle() {
+  try {
+    return normalizeFilenameStyle(window.localStorage.getItem(FILENAME_STYLE_KEY));
+  } catch {
+    return DEFAULT_FILENAME_STYLE;
+  }
+}
+
+function saveFilenameStyle() {
+  try {
+    window.localStorage.setItem(FILENAME_STYLE_KEY, state.filenameStyle);
+  } catch {
+    // Ignore persistence failures.
+  }
+}
+
 function rememberDestination(pathValue) {
   const normalized = String(pathValue || "").trim();
   if (!normalized) {
@@ -245,8 +330,8 @@ function refreshHostingCopy() {
   }
   if (elements.topbarBody) {
     elements.topbarBody.innerHTML = state.capabilities.outlookImport
-      ? "Drop Outlook emails or <code>.msg</code> files, then convert them to PDFs with the correct filename prefix."
-      : "Upload <code>.msg</code> files, then convert them to PDFs with the correct filename prefix.";
+      ? "Drop Outlook emails or <code>.msg</code> files, then convert them to PDFs with the selected filename style."
+      : "Upload <code>.msg</code> files, then convert them to PDFs with the selected filename style.";
   }
   if (elements.workflowBody) {
     elements.workflowBody.textContent = state.outputDir
@@ -255,6 +340,38 @@ function refreshHostingCopy() {
         ? "Drag from Outlook or click to browse. When you are ready, click Convert to PDF and choose where to save the files."
         : "Click to browse for .msg files or drag them into the page, then convert them to PDFs.";
   }
+}
+
+function refreshFilenameStyleCopy() {
+  if (elements.filenameStyleSelect) {
+    elements.filenameStyleSelect.value = state.filenameStyle;
+  }
+  if (elements.filenameStyleDetail) {
+    elements.filenameStyleDetail.textContent = FILENAME_STYLE_OPTIONS[state.filenameStyle]?.detail || FILENAME_STYLE_OPTIONS[DEFAULT_FILENAME_STYLE].detail;
+  }
+  refreshFilenameStyleExample();
+}
+
+function filenameStyleSample() {
+  return FILENAME_STYLE_OPTIONS[state.filenameStyle]?.example || FILENAME_STYLE_OPTIONS[DEFAULT_FILENAME_STYLE].example;
+}
+
+function liveFilenamePreviewItem() {
+  return (
+    state.items.find((item) => !TERMINAL_STAGES.has(item?.stage) && (item?.outputPath || item?.outputName)) ||
+    state.items.find((item) => !TERMINAL_STAGES.has(item?.stage) && item?.name) ||
+    null
+  );
+}
+
+function refreshFilenameStyleExample() {
+  if (!elements.filenameStyleExampleValue) {
+    return;
+  }
+  const previewItem = liveFilenamePreviewItem();
+  const previewName = previewItem ? queueOutputName(previewItem) : filenameStyleSample();
+  elements.filenameStyleExampleValue.textContent = previewName;
+  elements.filenameStyleExampleValue.title = previewName;
 }
 
 function lastPathSegment(value) {
@@ -337,6 +454,35 @@ function queueOutputName(item) {
   return `${baseName}.pdf`;
 }
 
+function reviewFilenameParts(value) {
+  const outputName = String(value || "");
+  const stem = outputName.replace(/\.pdf$/i, "");
+  const extension = outputName.toLowerCase().endsWith(".pdf") ? "PDF" : "";
+  const senderSubjectSplit = stem.lastIndexOf("__");
+  if (senderSubjectSplit > 0 && senderSubjectSplit < stem.length - 2) {
+    return {
+      prefixLabel: "From",
+      prefixValue: stem.slice(0, senderSubjectSplit).replace(/_+$/g, "").trim(),
+      name: stem.slice(senderSubjectSplit + 2).trim() || stem,
+      extension,
+    };
+  }
+
+  const [firstPart, ...remainingParts] = stem.split("_");
+  const hasUsefulSplit = remainingParts.length > 0 && firstPart.trim().length > 0;
+  const isDatePrefix = /^\d{4}-\d{2}-\d{2}$/.test(firstPart);
+  if (!hasUsefulSplit) {
+    return { prefixLabel: "", prefixValue: "", name: stem || outputName, extension };
+  }
+
+  return {
+    prefixLabel: isDatePrefix ? "Date" : "From",
+    prefixValue: firstPart.trim(),
+    name: remainingParts.join("_").trim() || stem,
+    extension,
+  };
+}
+
 function queueVisualState(item, progress) {
   const stage = item?.stage || "";
   if (stage === "complete" || progress?.tone === "complete") {
@@ -346,22 +492,91 @@ function queueVisualState(item, progress) {
     return { tone: "failed", label: "Needs attention" };
   }
   if (progress?.active) {
-    return { tone: "active", label: progress.label || "Converting" };
+    return { tone: progress.tone || "active", label: progress.label || "Converting" };
   }
   return { tone: "queued", label: "Ready" };
 }
 
 function deriveItemSummary(item, progress) {
   if (item.stage === "failed") {
-    return item.error || "This file could not be converted.";
+    return failureExplanation(item.error).reason;
   }
   if (item.stage === "complete") {
     return item.outputPath ? `Saved as ${lastPathSegment(item.outputPath)}` : "PDF saved.";
+  }
+  if (progress?.tone === "queued") {
+    return "Queued and ready to convert.";
   }
   if (progress?.active) {
     return `${progress.label || queueStageLabel(item.stage)} ${formatQueuePercent(progress)}`;
   }
   return formatSource(item.source);
+}
+
+function compactErrorLabel(error) {
+  const normalized = String(error || "").replace(/\s+/g, " ").trim();
+  const lowered = normalized.toLowerCase();
+  if (!normalized) {
+    return "The file did not finish converting.";
+  }
+  if (lowered.includes("timed out") || lowered.includes("timeout")) {
+    return "Conversion timed out. Retry this file.";
+  }
+  if (lowered.includes("permission") || lowered.includes("access is denied")) {
+    return "Save folder needs permission.";
+  }
+  if (lowered.includes("not found") || lowered.includes("missing") || lowered.includes("no such file")) {
+    return "Original file is missing.";
+  }
+  if (lowered.includes("ole2") || lowered.includes("structured storage")) {
+    return "This is not a valid Outlook .msg email.";
+  }
+  return normalized.length > 86 ? `${normalized.slice(0, 83).trimEnd()}...` : normalized;
+}
+
+function failureExplanation(error) {
+  const normalized = String(error || "").replace(/\s+/g, " ").trim();
+  const lowered = normalized.toLowerCase();
+  if (!normalized) {
+    return {
+      reason: "The file did not finish converting.",
+      action: "Retry it once. If it fails again, re-export the email from Outlook and drop the fresh copy here.",
+    };
+  }
+  if (lowered.includes("timed out") || lowered.includes("timeout")) {
+    return {
+      reason: "The conversion took too long.",
+      action: "Retry this file by itself. Large attachments or embedded images can need another pass.",
+    };
+  }
+  if (lowered.includes("permission") || lowered.includes("access is denied")) {
+    return {
+      reason: "The save folder could not be written to.",
+      action: "Choose a folder you can edit, then retry the failed file.",
+    };
+  }
+  if (lowered.includes("not found") || lowered.includes("missing") || lowered.includes("no such file")) {
+    return {
+      reason: "The original email file is no longer available.",
+      action: "Drop the email into the app again, then retry.",
+    };
+  }
+  if (lowered.includes("ole2") || lowered.includes("structured storage")) {
+    return {
+      reason: "This is not a valid Outlook .msg email.",
+      action: "Drop the original email from Outlook again, then retry. Files renamed to .msg will not convert.",
+    };
+  }
+  if (lowered.includes("parse") || lowered.includes("extract") || lowered.includes("read")) {
+    return {
+      reason: "The email could not be read cleanly.",
+      action: "Retry it once. If it still fails, re-export the message from Outlook and try the new copy.",
+    };
+  }
+  return {
+    reason: compactErrorLabel(error),
+    action: "Retry this file. Saved PDFs from the same batch will be left alone.",
+  };
 }
 
 function outputPreviewLabel(item) {
@@ -380,7 +595,7 @@ function buildQueueProgressStateFromSnapshot(item) {
     return null;
   }
   const model = QUEUE_STAGE_PROGRESS[item.stage];
-  const isTerminal = item.stage === "complete" || item.stage === "failed";
+  const isTerminal = TERMINAL_STAGES.has(item.stage);
   return {
     active: true,
     stage: item.stage,
@@ -399,6 +614,24 @@ function queueProgressStateForItem(item) {
   return state.queueProgressByTaskId[item.taskId] || buildQueueProgressStateFromSnapshot(item);
 }
 
+function progressPercentForItem(item) {
+  if (item.stage === "complete" || item.stage === "failed") {
+    const progress = queueProgressStateForItem(item);
+    if (progress?.active && progress.stage === item.stage && progress.percent < 100) {
+      return progress.percent;
+    }
+    return 100;
+  }
+  const progress = queueProgressStateForItem(item);
+  if (progress?.active) {
+    return progress.percent || 0;
+  }
+  if (item.stage === "files_accepted" || !item.stage) {
+    return 8;
+  }
+  return 0;
+}
+
 function delay(milliseconds) {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }
@@ -407,15 +640,19 @@ function summarizeBatch() {
   const queued = state.items.length;
   const complete = state.items.filter((item) => item.stage === "complete").length;
   const failed = state.items.filter((item) => item.stage === "failed").length;
-  const activeItems = state.items.filter((item) => item.stage !== "complete" && item.stage !== "failed");
+  const activeItems = state.items.filter((item) => !TERMINAL_STAGES.has(item.stage));
   const ready = activeItems.filter((item) => !item.stage || item.stage === "files_accepted").length;
   const activeProgress = activeItems
     .map((item) => queueProgressStateForItem(item))
     .filter((progress) => progress?.active);
   const activelyProcessing = activeItems.filter((item) => !["", "drop_received", "files_accepted"].includes(item.stage || ""));
-  const averageProgress = activeProgress.length
+  const totalProgress = queued
+    ? Math.round(state.items.reduce((sum, item) => sum + progressPercentForItem(item), 0) / queued)
+    : 0;
+  const activeAverageProgress = activeProgress.length
     ? Math.round(activeProgress.reduce((sum, progress) => sum + (progress.percent || 0), 0) / activeProgress.length)
-    : complete && queued ? 100 : 0;
+    : totalProgress;
+  const successPercent = queued ? Math.round((complete / queued) * 100) : 0;
 
   return {
     queued,
@@ -424,8 +661,90 @@ function summarizeBatch() {
     failed,
     activeCount: activeItems.length,
     activelyProcessingCount: activelyProcessing.length,
-    averageProgress,
+    averageProgress: totalProgress,
+    activeAverageProgress,
+    successPercent,
   };
+}
+
+function renderBatchReview({ shouldShowResult, destinationKnown }) {
+  if (!elements.resultReview || !elements.resultReviewList || !elements.resultReviewDestination) {
+    return;
+  }
+
+  const reviewItems = state.items.filter((item) => item.stage === "complete" || item.stage === "failed");
+  elements.resultReview.hidden = !shouldShowResult || reviewItems.length === 0;
+  if (elements.resultReview.hidden) {
+    elements.resultReviewList.innerHTML = "";
+    return;
+  }
+
+  elements.resultReviewDestination.textContent = destinationKnown
+    ? formatDestinationLabel()
+    : "Output folder not available";
+
+  elements.resultReviewList.innerHTML = reviewItems
+    .map((item) => {
+      const isSaved = item.stage === "complete";
+      const primary = isSaved ? queueOutputName(item) : item.name;
+      const nameParts = reviewFilenameParts(primary);
+      const failure = isSaved ? null : failureExplanation(item.error);
+      const detail = isSaved ? "Saved PDF" : failure.reason;
+      const action = failure?.action || "";
+      const revealAction = isSaved && item.outputPath
+        ? `<button class="result-review-reveal button button-ghost" type="button" data-result-reveal-path="${escapeHtml(item.outputPath)}" data-result-reveal-name="${escapeHtml(primary)}" data-testid="result-reveal-file" aria-label="Show ${escapeHtml(primary)} in output folder"><span class="folder-open-icon" aria-hidden="true"></span><span data-result-reveal-label>Show</span></button>`
+        : "";
+      return `
+        <div class="result-review-row is-${isSaved ? "saved" : "retry"}">
+          <span class="result-review-status">${isSaved ? "Saved" : "Failed"}</span>
+          <div class="result-review-file">
+            <div class="result-review-name-row" title="${escapeHtml(primary)}">
+              ${nameParts.prefixValue ? `<span class="result-review-prefix"><span class="result-review-prefix-label">${escapeHtml(nameParts.prefixLabel)}</span><span class="result-review-prefix-value">${escapeHtml(nameParts.prefixValue)}</span></span>` : ""}
+              <strong class="result-review-name">${escapeHtml(nameParts.name)}</strong>
+              ${nameParts.extension ? `<span class="result-review-extension">${escapeHtml(nameParts.extension)}</span>` : ""}
+            </div>
+            <span class="result-review-detail">${escapeHtml(detail)}</span>
+            ${action ? `<small>${escapeHtml(action)}</small>` : ""}
+          </div>
+          ${revealAction}
+        </div>
+      `;
+    })
+    .join("");
+}
+
+function buildQueueTerminalSummary(summary, { isTerminalBatch, visibleRows }) {
+  if (!isTerminalBatch) {
+    return "";
+  }
+  const expanded = state.queueDetailsExpanded;
+  const hasFailures = summary.failed > 0;
+  const headline = hasFailures
+    ? `${summary.failed} file${summary.failed === 1 ? "" : "s"} need retry`
+    : `${summary.complete} file${summary.complete === 1 ? "" : "s"} converted successfully`;
+  const detail = expanded
+    ? "Detailed queue rows are shown below."
+    : hasFailures
+      ? "Saved PDFs are summarized in Batch Result. Failed rows stay visible below."
+      : "Review the saved PDFs in Batch Result, or expand the queue details if needed.";
+  const actionLabel = expanded
+    ? "Hide details"
+    : hasFailures
+      ? "Show saved details"
+      : "Show queue details";
+
+  return `
+    <div class="queue-terminal-summary ${hasFailures ? "is-attention" : "is-success"}">
+      <div class="queue-terminal-copy">
+        <strong>${escapeHtml(headline)}</strong>
+        <span>${escapeHtml(detail)}</span>
+      </div>
+      <button class="queue-details-toggle" data-queue-details-toggle type="button" aria-expanded="${expanded ? "true" : "false"}">
+        ${escapeHtml(actionLabel)}
+      </button>
+    </div>
+    ${visibleRows.length ? "" : `<div class="queue-terminal-empty">Queue rows are hidden because the Batch Result has the review list.</div>`}
+  `;
 }
 
 function renderOperations() {
@@ -435,19 +754,24 @@ function renderOperations() {
   const isProcessing = state.isBusy || summary.activelyProcessingCount > 0;
   const isComplete = hasQueuedItems && summary.complete === summary.queued && summary.failed === 0;
   const isAttention = summary.failed > 0 && !isProcessing;
-  const mode = isComplete ? "complete" : isProcessing ? "processing" : hasQueuedItems ? "queued" : "idle";
+  const mode = isComplete ? "complete" : isAttention ? "attention" : isProcessing ? "processing" : hasQueuedItems ? "queued" : "idle";
 
   elements.metricQueued.textContent = String(summary.queued);
   elements.metricReady.textContent = String(summary.ready);
   elements.metricComplete.textContent = String(summary.complete);
   elements.metricFailed.textContent = String(summary.failed);
   elements.shell.dataset.mode = mode;
+  if (elements.saveCard) {
+    elements.saveCard.hidden = isComplete || isAttention;
+  }
 
   elements.destinationInlineValue.textContent = destinationKnown
     ? formatDestinationLabel()
     : !state.capabilities.nativeOutputPicker
       ? "Server-managed output folder."
       : "Choose a destination when you convert.";
+
+  updateReadinessSignals(summary, { destinationKnown, isProcessing, isComplete, isAttention });
 
   if (elements.historyStrip && elements.historyList) {
     const visibleDestinations = state.recentDestinations.filter((value) => value !== state.outputDir);
@@ -470,8 +794,8 @@ function renderOperations() {
         ? `All queued files were saved to ${formatDestinationLabel()}.`
         : "All queued files were saved successfully.";
     } else if (isAttention) {
-      elements.modeBannerTitle.textContent = "Review the exceptions";
-      elements.modeBannerDetail.textContent = `${summary.failed} file(s) need attention before the batch is fully clean.`;
+      elements.modeBannerTitle.textContent = "Review the failed files";
+      elements.modeBannerDetail.textContent = `${summary.failed} file(s) need another attempt. The saved PDFs are already finished.`;
     } else {
       elements.modeBannerTitle.textContent = "Batch is staged";
       elements.modeBannerDetail.textContent = destinationKnown
@@ -485,25 +809,45 @@ function renderOperations() {
     elements.resultFailed.textContent = String(summary.failed);
     const shouldShowResult = isComplete || isAttention;
     elements.resultBanner.hidden = !shouldShowResult;
-    if (elements.openOutputFolderButton) {
-      elements.openOutputFolderButton.hidden = !destinationKnown;
-      elements.openOutputFolderButton.disabled = !destinationKnown;
+    elements.resultBanner.classList.toggle("is-success", isComplete);
+    elements.resultBanner.classList.toggle("is-attention", isAttention);
+    renderBatchReview({ shouldShowResult, destinationKnown });
+    if (elements.resultOpenOutputButton) {
+      const canOpenOutput = destinationKnown && summary.complete > 0;
+      elements.resultOpenOutputButton.hidden = !canOpenOutput;
+      elements.resultOpenOutputButton.disabled = !canOpenOutput;
+    }
+    if (elements.resultRetryFailedButton) {
+      elements.resultRetryFailedButton.hidden = !isAttention;
+      elements.resultRetryFailedButton.disabled = !isAttention || state.isBusy;
+    }
+    if (elements.resultStartNewButton) {
+      elements.resultStartNewButton.disabled = state.isBusy;
     }
     if (shouldShowResult) {
       if (isComplete) {
-        elements.resultHeadline.textContent = "Batch complete";
+        elements.resultHeadline.textContent = `${summary.complete} PDF${summary.complete === 1 ? "" : "s"} saved`;
         elements.resultDetail.textContent = destinationKnown
           ? `Every queued email has been converted and saved to ${formatDestinationLabel()}.`
           : "Every queued email has been converted successfully.";
+        if (elements.resultGuidance) {
+          elements.resultGuidance.textContent = destinationKnown
+            ? "Open the output folder to review the PDFs, or start a new batch when you are ready."
+            : "The full batch is complete. Start a new batch when you are ready.";
+        }
       } else {
-        elements.resultHeadline.textContent = "Batch finished with exceptions";
-        elements.resultDetail.textContent = "Most files were converted, but some still need review or retry.";
+        elements.resultHeadline.textContent = `${summary.complete} saved, ${summary.failed} need retry`;
+        elements.resultDetail.textContent = "The saved PDFs are finished. Only the failed files below need another attempt.";
+        if (elements.resultGuidance) {
+          elements.resultGuidance.textContent = "Use Retry Failed to convert only the failed files again. The saved PDFs will not be duplicated.";
+        }
       }
     }
   }
 
   if (elements.openOutputFolderButton) {
-    const shouldShowOpenOutput = destinationKnown && !isProcessing && summary.complete > 0;
+    const resultPanelOwnsOutputAction = isComplete || isAttention;
+    const shouldShowOpenOutput = destinationKnown && !isProcessing && summary.complete > 0 && !resultPanelOwnsOutputAction;
     elements.openOutputFolderButton.hidden = !shouldShowOpenOutput;
     elements.openOutputFolderButton.disabled = !shouldShowOpenOutput;
   }
@@ -512,35 +856,41 @@ function renderOperations() {
     elements.convertButton.hidden = isComplete;
   }
 
+  const setBatchProgress = (percent) => {
+    const clamped = Math.max(0, Math.min(100, Math.round(percent || 0)));
+    elements.batchProgressFill.style.width = `${clamped}%`;
+    elements.batchProgressTrack?.setAttribute("aria-valuenow", String(clamped));
+  };
+
   if (!summary.queued) {
     elements.batchStatusPill.textContent = "Ready";
     elements.batchProgressHeadline.textContent = "No files in progress";
     elements.batchProgressDetail.textContent = "Add files to see the live conversion timeline.";
-    elements.batchProgressFill.style.width = "0%";
+    setBatchProgress(0);
   } else if (state.isBusy || summary.activelyProcessingCount) {
-    elements.batchStatusPill.textContent = summary.failed ? "In progress with exceptions" : "Converting";
+    elements.batchStatusPill.textContent = summary.failed ? "In progress with failed files" : "Converting";
     elements.batchProgressHeadline.textContent = `${summary.complete} of ${summary.queued} files saved`;
     elements.batchProgressDetail.textContent = summary.failed
-      ? `${summary.failed} file(s) still need attention.`
-      : `${summary.activelyProcessingCount} file(s) are still moving through the pipeline.`;
-    elements.batchProgressFill.style.width = `${summary.averageProgress}%`;
+      ? `${summary.failed} failed file(s) so far. Progress is estimated from live conversion stages.`
+      : `${summary.activelyProcessingCount} file(s) active. Progress is estimated from live conversion stages.`;
+    setBatchProgress(summary.averageProgress);
   } else if (summary.failed) {
     elements.batchStatusPill.textContent = "Needs attention";
     elements.batchProgressHeadline.textContent = `${summary.failed} file(s) need a retry`;
-    elements.batchProgressDetail.textContent = "Review the failed rows below and retry only the exceptions.";
-    elements.batchProgressFill.style.width = `${Math.min(100, Math.max(8, summary.complete ? 100 : 14))}%`;
+    elements.batchProgressDetail.textContent = "Review the failed rows below and retry only those files.";
+    setBatchProgress(100);
   } else if (summary.complete === summary.queued) {
     elements.batchStatusPill.textContent = "Complete";
     elements.batchProgressHeadline.textContent = "Every queued file has been saved";
     elements.batchProgressDetail.textContent = "You can clear the queue or keep the rows as a quick audit trail.";
-    elements.batchProgressFill.style.width = "100%";
+    setBatchProgress(100);
   } else {
     elements.batchStatusPill.textContent = "Ready";
     elements.batchProgressHeadline.textContent = `${summary.ready} file(s) ready to convert`;
     elements.batchProgressDetail.textContent = destinationKnown
       ? `Destination confirmed: ${formatDestinationLabel()}`
       : "Click Convert to choose a destination and start the batch.";
-    elements.batchProgressFill.style.width = summary.queued ? "12%" : "0%";
+    setBatchProgress(Math.max(8, Math.min(14, summary.averageProgress || 8)));
   }
 
   const completedStages = new Set();
@@ -592,7 +942,7 @@ function renderOperations() {
     const detail = item.stage === "complete"
       ? "Converted successfully"
       : item.stage === "failed"
-        ? item.error || "Failed to convert"
+        ? failureExplanation(item.error).reason
         : progress?.active
           ? `${progress.label || queueStageLabel(item.stage)} ${formatQueuePercent(progress)}`
           : "Queued and ready";
@@ -604,6 +954,56 @@ function renderOperations() {
       </div>
     `;
   }).join("");
+}
+
+function setReadinessStep(stepElement, valueElement, tone, value) {
+  if (!stepElement || !valueElement) {
+    return;
+  }
+  stepElement.className = `readiness-step is-${tone}`;
+  valueElement.textContent = value;
+}
+
+function pluralizeCount(count, singular, plural = `${singular}s`) {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function updateReadinessSignals(summary, { destinationKnown, isProcessing, isComplete, isAttention }) {
+  if (!elements.readinessFiles || !elements.readinessDestination || !elements.readinessConversion) {
+    return;
+  }
+
+  if (!summary.queued) {
+    setReadinessStep(elements.readinessFiles, elements.readinessFilesValue, "needed", "Waiting");
+  } else if (summary.failed && !isProcessing) {
+    setReadinessStep(elements.readinessFiles, elements.readinessFilesValue, "warning", pluralizeCount(summary.failed, "issue"));
+  } else if (isComplete) {
+    setReadinessStep(elements.readinessFiles, elements.readinessFilesValue, "done", `${summary.complete} saved`);
+  } else {
+    setReadinessStep(elements.readinessFiles, elements.readinessFilesValue, "done", `${summary.ready || summary.queued} ready`);
+  }
+
+  if (!state.capabilities.nativeOutputPicker) {
+    setReadinessStep(elements.readinessDestination, elements.readinessDestinationValue, "done", "Managed");
+  } else if (destinationKnown) {
+    setReadinessStep(elements.readinessDestination, elements.readinessDestinationValue, "done", lastPathSegment(formatDestinationLabel()) || "Selected");
+  } else if (summary.queued && !isComplete) {
+    setReadinessStep(elements.readinessDestination, elements.readinessDestinationValue, "active", "Choose now");
+  } else {
+    setReadinessStep(elements.readinessDestination, elements.readinessDestinationValue, "pending", "Choose later");
+  }
+
+  if (isProcessing) {
+    setReadinessStep(elements.readinessConversion, elements.readinessConversionValue, "active", `${Math.round(summary.averageProgress)}%`);
+  } else if (isComplete) {
+    setReadinessStep(elements.readinessConversion, elements.readinessConversionValue, "done", "Saved");
+  } else if (isAttention) {
+    setReadinessStep(elements.readinessConversion, elements.readinessConversionValue, "warning", "Retry");
+  } else if (summary.queued) {
+    setReadinessStep(elements.readinessConversion, elements.readinessConversionValue, "active", "Ready");
+  } else {
+    setReadinessStep(elements.readinessConversion, elements.readinessConversionValue, "pending", "Not started");
+  }
 }
 
 async function openOutputFolder() {
@@ -618,6 +1018,35 @@ async function openOutputFolder() {
     body: JSON.stringify({ output_dir: state.outputDir }),
   });
   addStatus("Output folder opened.", state.outputDir, "success");
+}
+
+async function revealOutputFile(outputPath, outputName = "PDF") {
+  const normalizedPath = String(outputPath || "").trim();
+  if (!normalizedPath) {
+    addStatus("This PDF cannot be opened yet.", "Use Open Output Folder to review the saved files.", "error");
+    return;
+  }
+
+  await api("/api/reveal-output-file", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ output_path: normalizedPath }),
+  });
+  addStatus("PDF shown in folder.", outputName, "success");
+}
+
+function setRevealButtonFeedback(button, { label, tone }) {
+  if (!button) {
+    return;
+  }
+  const labelElement = button.querySelector("[data-result-reveal-label]");
+  button.classList.remove("is-confirmed", "is-error");
+  if (tone) {
+    button.classList.add(`is-${tone}`);
+  }
+  if (labelElement) {
+    labelElement.textContent = label;
+  }
 }
 
 function startQueueProgressLoop() {
@@ -712,6 +1141,8 @@ function updateQueueProgress(taskId, stage) {
   const currentPercent = previous?.percent || 0;
   const nextFloor = Math.max(currentPercent, model?.floor || currentPercent);
   const nextCap = Math.max(nextFloor, model?.cap || currentPercent);
+  const isTerminal = TERMINAL_STAGES.has(stage);
+  const shouldEaseTerminal = isTerminal && previous?.active && currentPercent < nextCap - 0.02;
 
   state.queueProgressByTaskId = {
     ...state.queueProgressByTaskId,
@@ -720,7 +1151,7 @@ function updateQueueProgress(taskId, stage) {
       stage,
       label: model?.label || queueStageLabel(stage),
       tone: model?.tone || previous?.tone || "active",
-      percent: currentPercent,
+      percent: shouldEaseTerminal ? currentPercent : isTerminal ? nextCap : currentPercent,
       floorPercent: nextFloor,
       capPercent: nextCap,
       baseRate: model?.baseRate || previous?.baseRate || 6,
@@ -971,17 +1402,29 @@ function updateActionState() {
 
 function renderQueue() {
   const queuedCount = state.items.length;
+  const summary = summarizeBatch();
+  const isTerminalBatch = queuedCount > 0 && summary.activeCount === 0 && !state.isBusy;
+  const shouldCollapseTerminalQueue = isTerminalBatch && !state.queueDetailsExpanded;
+  const visibleItems = shouldCollapseTerminalQueue && summary.failed > 0
+    ? state.items.filter((item) => item.stage === "failed")
+    : shouldCollapseTerminalQueue
+      ? []
+      : state.items;
+  refreshFilenameStyleExample();
+  elements.queuePanel?.classList.toggle("is-terminal", isTerminalBatch);
+  elements.queuePanel?.classList.toggle("is-terminal-collapsed", shouldCollapseTerminalQueue);
   elements.queueEmpty.hidden = queuedCount > 0;
   elements.queueList.hidden = queuedCount === 0;
 
   if (!queuedCount) {
     elements.queueList.innerHTML = "";
+    state.queueDetailsExpanded = false;
     renderOperations();
     updateActionState();
     return;
   }
 
-  const rows = state.items
+  const rows = visibleItems
     .map((item, index) => {
       const progress = queueProgressStateForItem(item);
       const visual = queueVisualState(item, progress);
@@ -990,11 +1433,17 @@ function renderQueue() {
       const isRemoving = Boolean(state.pendingRemovalsById[item.id]);
       const isNew = state.recentlyQueuedIds.has(item.id);
       const summary = deriveItemSummary(item, progress);
-      const percent = Math.round(progress?.percent || 0);
+      const rawPercent = progressPercentForItem(item);
+      const percent = Math.round(rawPercent);
       const sizeLabel = formatByteSize(item.sizeBytes);
+      const outputDetail = item.stage === "failed"
+        ? `<span class="queue-summary-line is-error">${escapeHtml(compactErrorLabel(item.error))}</span>`
+        : isNew
+          ? `<span class="queue-summary-line"><span class="queue-arrival-chip">Filename prepared</span></span>`
+          : `<span class="queue-summary-line">${escapeHtml(formatSource(item.source))}</span>`;
 
       return `
-        <div class="queue-item is-${visual.tone} ${isNew ? "is-new" : ""}" style="--queue-progress: ${progress?.percent || 0}; --row-index: ${index}">
+        <div class="queue-item is-${visual.tone} ${isNew ? "is-new" : ""}" style="--queue-progress: ${rawPercent}; --row-index: ${index}">
           <div class="queue-main">
             <span class="queue-file-glyph is-${visual.tone}" aria-hidden="true">${escapeHtml(queueDocumentLabel(item))}</span>
             <div class="queue-copy">
@@ -1006,13 +1455,13 @@ function renderQueue() {
             <span class="queue-output-glyph" aria-hidden="true"></span>
             <div class="queue-copy">
               <div class="queue-output-name" title="${escapeHtml(outputPreviewLabel(item))}">${escapeHtml(queueOutputName(item))}</div>
-              <div class="queue-summary-line">${isNew ? `<span class="queue-arrival-chip">Filename prepared</span>` : escapeHtml(formatSource(item.source))}</div>
+              ${outputDetail}
             </div>
           </div>
           <div class="queue-progress-cell">
             <span class="queue-percent">${percent}%</span>
-            <div class="queue-progress-track" aria-hidden="true">
-              <span class="queue-progress-fill" style="width: ${progress?.percent || 0}%"></span>
+            <div class="queue-progress-track" role="progressbar" aria-label="${escapeHtml(item.name)} conversion progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percent}">
+              <span class="queue-progress-fill" style="width: ${rawPercent}%"></span>
             </div>
           </div>
           <div class="queue-actions">
@@ -1029,13 +1478,21 @@ function renderQueue() {
     })
     .join("");
 
+  const terminalSummary = buildQueueTerminalSummary(summary, { isTerminalBatch, visibleRows: visibleItems });
+  const tableHeader = visibleItems.length
+    ? `
+      <div class="queue-table-header" aria-hidden="true">
+        <span>File Name</span>
+        <span>Output PDF</span>
+        <span>Progress</span>
+        <span>Status</span>
+      </div>
+    `
+    : "";
+
   elements.queueList.innerHTML = `
-    <div class="queue-table-header" aria-hidden="true">
-      <span>File Name</span>
-      <span>Output PDF</span>
-      <span>Progress</span>
-      <span>Status</span>
-    </div>
+    ${terminalSummary}
+    ${tableHeader}
     ${rows}
   `;
 
@@ -1051,6 +1508,14 @@ function applyQueueSnapshot(items) {
 
   nextItems.forEach((item) => {
     const existing = state.queueProgressByTaskId[item.taskId];
+    if (TERMINAL_STAGES.has(item.stage)) {
+      if (existing?.active && existing.stage === item.stage && existing.percent < 100) {
+        nextProgress[item.taskId] = existing;
+        return;
+      }
+      nextProgress[item.taskId] = buildQueueProgressStateFromSnapshot(item) || existing;
+      return;
+    }
     if (existing?.active) {
       nextProgress[item.taskId] = existing;
       return;
@@ -1101,6 +1566,19 @@ function mergeQueueEvent(payload) {
     payload.outputName ||
     (payload.meta && typeof payload.meta.outputName === "string" ? payload.meta.outputName : "") ||
     "";
+  const eventOutputDir =
+    (payload.meta && typeof payload.meta.outputDir === "string" ? payload.meta.outputDir : "") ||
+    parentPath(outputPath);
+  const eventOutputDirLabel =
+    (payload.meta && typeof payload.meta.outputDirLabel === "string" ? payload.meta.outputDirLabel : "") ||
+    lastPathSegment(eventOutputDir);
+
+  if (eventOutputDir && !state.outputDir) {
+    state.outputDir = eventOutputDir;
+    state.outputDirLabel = eventOutputDirLabel;
+    rememberDestination(eventOutputDir);
+    refreshHostingCopy();
+  }
 
   let changed = false;
   state.items = state.items.map((item) => {
@@ -1128,9 +1606,10 @@ function describeEvent(payload) {
   const fileName = payload.fileName || "File";
   const stageLabel = queueStageLabel(payload.stage);
   if (payload.stage === "failed") {
+    const failure = failureExplanation(payload.error);
     return {
       headline: `${fileName} needs attention.`,
-      detail: payload.error || "The file could not be converted.",
+      detail: failure.reason,
       tone: "error",
     };
   }
@@ -1183,6 +1662,15 @@ async function loadQueue() {
   applyQueueSnapshot(payload.items || []);
 }
 
+async function refreshFilenameStylePreview() {
+  const payload = await api("/api/filename-style-preview", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filename_style: state.filenameStyle }),
+  });
+  applyQueueSnapshot(payload.items || []);
+}
+
 function detectUploadSourceFromDrop(dataTransfer) {
   if (!state.capabilities.outlookImport) {
     return "upload";
@@ -1226,23 +1714,25 @@ async function uploadFiles(files, { sourceHint = "upload" } = {}) {
   const formData = new FormData();
   [...files].forEach((file) => formData.append("files", file));
   formData.append("source_hint", sourceHint);
+  formData.append("filename_style", state.filenameStyle);
   const [payload] = await Promise.all([
     api("/api/upload", { method: "POST", body: formData }),
     delay(700),
   ]);
   const acceptedIds = new Set((payload.accepted || []).map((item) => item.id).filter(Boolean));
   state.recentlyQueuedIds = acceptedIds;
+  state.queueDetailsExpanded = false;
   applyQueueSnapshot(payload.items || []);
   if (payload.accepted?.length) {
     const count = payload.accepted.length;
     flashDropzone(
       "success",
       `${count} email${count === 1 ? "" : "s"} staged`,
-      "Date-prefixed PDF names are ready in the queue.",
+      "PDF filenames are ready in the queue.",
     );
     addStatus(
       `Ready to convert: ${count} email${count === 1 ? "" : "s"} staged.`,
-      "Date-prefixed PDF names are prepared in the queue.",
+      "PDF filenames are prepared in the queue.",
       "success",
     );
     triggerQueueHandoff();
@@ -1311,6 +1801,7 @@ async function convertQueue() {
 
   const ids = convertibleItems.map((item) => item.id);
   state.activeConvertIds = ids;
+  state.queueDetailsExpanded = false;
   convertibleItems.forEach((item) => activateQueueProgress(item.taskId));
   renderQueue();
   startQueueProgressLoop();
@@ -1320,7 +1811,7 @@ async function convertQueue() {
     const payload = await api("/api/convert", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ids, output_dir: state.outputDir }),
+      body: JSON.stringify({ ids, output_dir: state.outputDir, filename_style: state.filenameStyle }),
     });
     await loadQueue();
     if (payload.convertedFiles?.length) {
@@ -1328,7 +1819,7 @@ async function convertQueue() {
       celebrateQueueCompletion();
     }
     if (payload.errors?.length) {
-      payload.errors.forEach((error) => addStatus("A file could not be converted.", error, "error"));
+      payload.errors.forEach((error) => addStatus("A file could not be converted.", failureExplanation(error).reason, "error"));
     }
   } finally {
     state.activeConvertIds = [];
@@ -1360,7 +1851,7 @@ async function retryItem(id) {
     const payload = await api("/api/convert", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ids: [id], output_dir: state.outputDir }),
+      body: JSON.stringify({ ids: [id], output_dir: state.outputDir, filename_style: state.filenameStyle }),
     });
     await loadQueue();
     if (payload.convertedFiles?.length) {
@@ -1368,7 +1859,49 @@ async function retryItem(id) {
       celebrateQueueCompletion();
     }
     if (payload.errors?.length) {
-      payload.errors.forEach((error) => addStatus("Retry failed.", error, "error"));
+      payload.errors.forEach((error) => addStatus("Retry failed.", failureExplanation(error).reason, "error"));
+    }
+  } finally {
+    state.activeConvertIds = [];
+    updateActionState();
+  }
+}
+
+async function retryFailedItems() {
+  const failedItems = state.items.filter((item) => item.stage === "failed");
+  if (!failedItems.length) {
+    addStatus("No failed files to retry.", "Every visible file is already clear.", "neutral");
+    return;
+  }
+
+  if (!state.outputDir) {
+    const selected = await chooseOutputFolder({ silentCancel: false });
+    if (!selected) {
+      addStatus("Choose a destination before retrying.", "Retry has not started yet.", "error");
+      return;
+    }
+  }
+
+  const ids = failedItems.map((item) => item.id);
+  state.activeConvertIds = ids;
+  failedItems.forEach((item) => activateQueueProgress(item.taskId));
+  renderQueue();
+  startQueueProgressLoop();
+  addStatus(`Retrying ${ids.length} failed file${ids.length === 1 ? "" : "s"}.`, "Only failed rows are being converted again.", "neutral");
+
+  try {
+    const payload = await api("/api/convert", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids, output_dir: state.outputDir, filename_style: state.filenameStyle }),
+    });
+    await loadQueue();
+    if (payload.convertedFiles?.length) {
+      addStatus(`Recovered ${payload.convertedFiles.length} file(s).`, "Recovered PDFs have been saved.", "success");
+      celebrateQueueCompletion();
+    }
+    if (payload.errors?.length) {
+      payload.errors.forEach((error) => addStatus("A failed file still needs attention.", failureExplanation(error).reason, "error"));
     }
   } finally {
     state.activeConvertIds = [];
@@ -1414,6 +1947,13 @@ function installQueueEvents() {
   elements.queueList.addEventListener("click", async (event) => {
     const target = event.target;
     if (!(target instanceof HTMLElement)) {
+      return;
+    }
+
+    const detailsToggle = target.closest("[data-queue-details-toggle]");
+    if (detailsToggle instanceof HTMLButtonElement) {
+      state.queueDetailsExpanded = !state.queueDetailsExpanded;
+      renderQueue();
       return;
     }
 
@@ -1502,10 +2042,35 @@ function setDropzoneCopy(mode) {
   elements.dropzoneCopy.textContent = DEFAULT_DROP_COPY;
 }
 
+function previewDropIntent(sourceHint) {
+  const mode = sourceHint === "outlook" ? "outlook" : "upload";
+  setDropzoneCopy(mode);
+  if (elements.dropFeedbackTitle) {
+    elements.dropFeedbackTitle.textContent = mode === "outlook" ? "Release to stage emails" : "Release to stage files";
+  }
+  if (elements.dropFeedbackDetail) {
+    elements.dropFeedbackDetail.textContent = mode === "outlook"
+      ? "Outlook is preparing the drag. Keep holding and release here."
+      : "The queue will inspect the dropped .msg files.";
+  }
+}
+
+function clearDropIntentPreview() {
+  setDropzoneCopy("default");
+  if (elements.dropFeedbackTitle) {
+    elements.dropFeedbackTitle.textContent = "Email staged";
+  }
+  if (elements.dropFeedbackDetail) {
+    elements.dropFeedbackDetail.textContent = "Date-prefixed PDF name prepared.";
+  }
+}
+
 function installDropzoneEvents() {
   dropzoneController = createDropzoneController({
     canvas: elements.dropRippleCanvas,
     dropzone: elements.dropzone,
+    onDragIntent: ({ sourceHint } = {}) => previewDropIntent(sourceHint),
+    onDragEnd: clearDropIntentPreview,
     onDrop: (files, options) => runBusy(() => uploadFiles(files, options)),
     onError: (error) => {
       clearDropzoneFeedback();
@@ -1520,10 +2085,56 @@ function installDropzoneEvents() {
 }
 
 function installFeedbackEvents() {
-  elements.openOutputFolderButton?.addEventListener("click", () => {
+  const openOutputFolderFromButton = () => {
     openOutputFolder().catch((error) => {
       addStatus("The output folder could not be opened.", error.message, "error");
     });
+  };
+  elements.openOutputFolderButton?.addEventListener("click", openOutputFolderFromButton);
+  elements.resultOpenOutputButton?.addEventListener("click", openOutputFolderFromButton);
+  elements.resultReviewList?.addEventListener("click", async (event) => {
+    const clickTarget = event.target instanceof Element ? event.target : null;
+    const revealButton = clickTarget?.closest("[data-result-reveal-path]");
+    if (!revealButton || state.isBusy) {
+      return;
+    }
+    revealButton.disabled = true;
+    try {
+      await revealOutputFile(revealButton.dataset.resultRevealPath, revealButton.dataset.resultRevealName);
+      revealButton.disabled = false;
+      setRevealButtonFeedback(revealButton, { label: "Shown", tone: "confirmed" });
+    } catch (error) {
+      revealButton.disabled = false;
+      setRevealButtonFeedback(revealButton, { label: "Unavailable", tone: "error" });
+      addStatus("The PDF could not be shown.", error.message, "error");
+    } finally {
+      window.setTimeout(() => {
+        revealButton.disabled = false;
+        setRevealButtonFeedback(revealButton, { label: "Show", tone: "" });
+      }, 1800);
+    }
+  });
+  elements.resultRetryFailedButton?.addEventListener("click", async () => {
+    if (state.isBusy) {
+      addStatus("Please wait for the current conversion to finish.", "Then retry failed files if any remain.", "neutral");
+      return;
+    }
+    try {
+      await runBusy(retryFailedItems);
+    } catch (error) {
+      addStatus("Could not retry failed files.", error.message, "error");
+    }
+  });
+  elements.resultStartNewButton?.addEventListener("click", async () => {
+    if (state.isBusy) {
+      addStatus("Please wait for the current conversion to finish.", "Then start a new batch.", "neutral");
+      return;
+    }
+    try {
+      await runBusy(clearQueue);
+    } catch (error) {
+      addStatus("Could not start a new batch.", error.message, "error");
+    }
   });
   elements.tutorialButton?.addEventListener("click", () => {
     if (state.tutorialOpen) {
@@ -1569,6 +2180,21 @@ function connectEvents() {
 }
 
 function installActionEvents() {
+  elements.filenameStyleSelect?.addEventListener("change", async () => {
+    state.filenameStyle = normalizeFilenameStyle(elements.filenameStyleSelect.value);
+    saveFilenameStyle();
+    refreshFilenameStyleCopy();
+    if (!state.items.some((item) => item.stage !== "complete")) {
+      return;
+    }
+    try {
+      await runBusy(refreshFilenameStylePreview);
+      addStatus("Filename style updated.", "Queued PDF names were refreshed.", "success");
+    } catch (error) {
+      addStatus("Could not refresh filename previews.", error.message, "error");
+    }
+  });
+
   elements.fileInput.addEventListener("change", async () => {
     try {
       await runBusy(() => uploadFiles(elements.fileInput.files));
@@ -1607,6 +2233,8 @@ function installActionEvents() {
 
 async function bootstrap() {
   state.recentDestinations = loadRecentDestinations();
+  state.filenameStyle = loadFilenameStyle();
+  refreshFilenameStyleCopy();
   renderStatus();
   renderTutorialModal();
   renderFeedbackModal();
@@ -1621,6 +2249,9 @@ async function bootstrap() {
   await loadSettings();
   await loadHealth();
   await loadQueue();
+  if (state.filenameStyle !== DEFAULT_FILENAME_STYLE && state.items.some((item) => item.stage !== "complete")) {
+    await refreshFilenameStylePreview();
+  }
 }
 
 bootstrap().catch((error) => {
