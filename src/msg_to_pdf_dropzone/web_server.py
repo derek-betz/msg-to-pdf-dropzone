@@ -50,7 +50,7 @@ def _package_version() -> str:
 def _read_release_info() -> dict[str, object]:
     release_path = PACKAGE_ROOT / RELEASE_INFO_FILE
     try:
-        raw_payload = json.loads(release_path.read_text(encoding="utf-8"))
+        raw_payload = json.loads(release_path.read_text(encoding="utf-8-sig"))
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         return {}
     if not isinstance(raw_payload, dict):

@@ -56,16 +56,16 @@ def test_version_payload_reads_deploy_release_file(monkeypatch, tmp_path: Path) 
     monkeypatch.delenv("MSG_TO_PDF_APP_REVISION", raising=False)
     monkeypatch.delenv("MSG_TO_PDF_SOURCE_REVISION", raising=False)
     monkeypatch.setattr(web_server, "PACKAGE_ROOT", tmp_path)
-    (tmp_path / "_release.json").write_text(
-        json.dumps(
+    (tmp_path / "_release.json").write_bytes(
+        "\ufeff".encode("utf-8")
+        + json.dumps(
             {
                 "sourceRevision": "deployed-revision",
                 "sourceBranch": "main",
                 "deployedAt": "2026-05-08T00:00:00Z",
                 "deployedBy": "HANSON\\betz02340",
             }
-        ),
-        encoding="utf-8",
+        ).encode("utf-8")
     )
 
     payload = web_server.build_version_payload()
