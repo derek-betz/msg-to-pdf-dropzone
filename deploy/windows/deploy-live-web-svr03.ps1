@@ -114,9 +114,17 @@ for label, path, local_path in pairs:
 print(json.dumps({'health': health, 'settings': settings, 'version': version}, indent=2))
 '@
 
-    & $PythonExe -c $validationScript $Url $Root $ExpectedRevision
-    if ($LASTEXITCODE -ne 0) {
-        throw "Live validation failed with exit code $LASTEXITCODE."
+    $tempValidationScript = Join-Path ([System.IO.Path]::GetTempPath()) "msg-to-pdf-live-validation-$([guid]::NewGuid().ToString('N')).py"
+    Set-Content -LiteralPath $tempValidationScript -Value $validationScript -Encoding UTF8
+    try {
+        & $PythonExe $tempValidationScript $Url $Root $ExpectedRevision
+        if ($LASTEXITCODE -ne 0) {
+            throw "Live validation failed with exit code $LASTEXITCODE."
+        }
+    } finally {
+        if (Test-Path -LiteralPath $tempValidationScript) {
+            Remove-Item -LiteralPath $tempValidationScript -Force
+        }
     }
 }
 
