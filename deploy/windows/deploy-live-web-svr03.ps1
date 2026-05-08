@@ -151,14 +151,18 @@ Write-Host "Revision: $revision"
 
 if (-not $SkipTests) {
     $testPython = if (Test-Path -LiteralPath $sourcePython) { $sourcePython } else { $livePython }
+    $pytestTemp = Join-Path $SourceRoot ".pytest-tmp"
     $previousPythonPath = $env:PYTHONPATH
     $env:PYTHONPATH = Join-Path $SourceRoot "src"
     try {
         Invoke-NativeChecked "Running pytest release gate" {
-            & $testPython -m pytest --basetemp (Join-Path $SourceRoot ".pytest-tmp")
+            & $testPython -m pytest --basetemp $pytestTemp
         }
     } finally {
         $env:PYTHONPATH = $previousPythonPath
+        if (Test-Path -LiteralPath $pytestTemp) {
+            Remove-Item -LiteralPath $pytestTemp -Recurse -Force
+        }
     }
 }
 
