@@ -9,6 +9,7 @@ import re
 
 from fastapi.testclient import TestClient
 
+import msg_to_pdf_dropzone.web_server as web_server
 from msg_to_pdf_dropzone.converter import ConversionResult
 from msg_to_pdf_dropzone.models import EmailRecord
 from msg_to_pdf_dropzone.task_events import emit_task_event
@@ -33,6 +34,46 @@ def test_health_and_queue_snapshot(monkeypatch, tmp_path: Path) -> None:
     assert health.json()["ok"] is True
     assert queue.status_code == 200
     assert queue.json()["items"] == []
+
+
+def test_health_and_version_include_release_metadata(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("msg_to_pdf_dropzone.web_server.STAGING_DIR", tmp_path / "staging")
+    monkeypatch.setenv("MSG_TO_PDF_APP_REVISION", "abc123")
+    client = TestClient(create_app())
+
+    health = client.get("/api/health")
+    version = client.get("/api/version")
+
+    assert health.status_code == 200
+    assert version.status_code == 200
+    assert health.json()["appName"] == "msg-to-pdf-dropzone"
+    assert health.json()["sourceRevision"] == "abc123"
+    assert version.json()["sourceRevision"] == "abc123"
+    assert isinstance(version.json()["appVersion"], str)
+
+
+def test_version_payload_reads_deploy_release_file(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("MSG_TO_PDF_APP_REVISION", raising=False)
+    monkeypatch.delenv("MSG_TO_PDF_SOURCE_REVISION", raising=False)
+    monkeypatch.setattr(web_server, "PACKAGE_ROOT", tmp_path)
+    (tmp_path / "_release.json").write_text(
+        json.dumps(
+            {
+                "sourceRevision": "deployed-revision",
+                "sourceBranch": "main",
+                "deployedAt": "2026-05-08T00:00:00Z",
+                "deployedBy": "HANSON\\betz02340",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    payload = web_server.build_version_payload()
+
+    assert payload["sourceRevision"] == "deployed-revision"
+    assert payload["sourceBranch"] == "main"
+    assert payload["deployedAt"] == "2026-05-08T00:00:00Z"
+    assert payload["deployedBy"] == "HANSON\\betz02340"
 
 
 def test_index_includes_feedback_modal(monkeypatch, tmp_path: Path) -> None:

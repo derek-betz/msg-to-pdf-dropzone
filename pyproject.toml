@@ -39,6 +39,7 @@ where = ["src"]
 msg_to_pdf_dropzone = [
   "assets/mailroom/*.json",
   "assets/mailroom/*.png",
+  "_release.json",
   "theater_assets/*",
   "theater_assets/assets/*",
   "web_ui/*",

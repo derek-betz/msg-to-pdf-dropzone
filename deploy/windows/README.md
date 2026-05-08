@@ -20,6 +20,7 @@ Use this folder for the `WEB-SVR03` deployment shape that mirrors `CostEstimateG
 - `web-svr03.app.env`: proposed runtime values for `WEB-SVR03`
 - `run-msg-to-pdf-dropzone.ps1`: starts the hosted web app on loopback
 - `register-msg-to-pdf-dropzone-task.ps1`: registers the supported startup path on `WEB-SVR03`
+- `deploy-live-web-svr03.ps1`: validates a checkout, backs up the live root, deploys to `WEB-SVR03`, restarts the scheduled task, and verifies live assets
 - `WEB-SVR03-CHECKLIST.md`: copy/paste bring-up and validation steps for the server
 
 ## Serving model
@@ -48,3 +49,22 @@ Use this folder for the `WEB-SVR03` deployment shape that mirrors `CostEstimateG
 7. Replace the localhost proof config with `web-svr03.app.env` for final direct TLS on `443`.
 8. Register or update the scheduled task.
 9. Validate `https://emailpdf.hanson-inc.com`.
+
+## Refresh the live WEB-SVR03 app
+
+When Codex is already running on `WEB-SVR03`, do not start with WinRM. Check `hostname`, then use the local durable root:
+
+- Live app root: `C:\Program Files\msg-to-pdf-dropzone`
+- Scheduled task: `msg-to-pdf-dropzone Web`
+- Runtime config: `C:\ProgramData\msg-to-pdf-dropzone\config\app.env`
+- Backups: `C:\incoming\backups\`
+
+Run this from a validated checkout:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File `
+  '.\deploy\windows\deploy-live-web-svr03.ps1' `
+  -SourceRoot (Get-Location).Path
+```
+
+The script preserves the live `.venv`, writes `src\msg_to_pdf_dropzone\_release.json`, reinstalls the package into the live virtualenv, restarts the scheduled task, validates `/api/health`, `/api/settings`, `/api/version`, and compares the live static UI assets against the deployed files.

@@ -128,5 +128,21 @@ If IT wants a specific service account, rerun the same command with `-TaskUser` 
 
 - Confirm the scheduled task starts cleanly after a reboot or manual run.
 - Confirm the app log is being written to `C:\ProgramData\msg-to-pdf-dropzone\logs\msg-to-pdf-dropzone.log`.
-- Validate `https://emailpdf.hanson-inc.com`.
+- Validate `https://emailpdf.hanson-inc.com/api/health`, `https://emailpdf.hanson-inc.com/api/settings`, and `https://emailpdf.hanson-inc.com/api/version`.
 - Submit a feedback test and confirm it is saved under `C:\ProgramData\msg-to-pdf-dropzone\outputs\feedback\`.
+
+## Refresh an existing live install
+
+If Codex is already running on `WEB-SVR03`, check `hostname` before trying remoting. The durable live root is:
+
+- `C:\Program Files\msg-to-pdf-dropzone`
+
+From a validated checkout, use the scripted refresh path:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File `
+  '.\deploy\windows\deploy-live-web-svr03.ps1' `
+  -SourceRoot (Get-Location).Path
+```
+
+The script takes a timestamped backup under `C:\incoming\backups\`, preserves `.venv`, copies the checkout, writes release metadata, reinstalls the package into the live virtualenv, restarts `msg-to-pdf-dropzone Web`, and verifies the live health/settings/version endpoints plus static UI asset hashes.

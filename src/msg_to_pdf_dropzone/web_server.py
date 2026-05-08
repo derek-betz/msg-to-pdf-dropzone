@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import hmac
 import html
+from importlib.metadata import PackageNotFoundError, version
 import json
 import os
 from pathlib import Path
@@ -35,6 +36,70 @@ from .thread_logic import DEFAULT_FILENAME_STYLE, build_pdf_filename, get_latest
 PACKAGE_ROOT = Path(__file__).resolve().parent
 WEB_UI_DIR = PACKAGE_ROOT / "web_ui"
 ASSET_DIR = PACKAGE_ROOT / "assets"
+APP_NAME = "msg-to-pdf-dropzone"
+RELEASE_INFO_FILE = "_release.json"
+
+
+def _package_version() -> str:
+    try:
+        return version(APP_NAME)
+    except PackageNotFoundError:
+        return "0.1.0"
+
+
+def _read_release_info() -> dict[str, object]:
+    release_path = PACKAGE_ROOT / RELEASE_INFO_FILE
+    try:
+        raw_payload = json.loads(release_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+    if not isinstance(raw_payload, dict):
+        return {}
+    return raw_payload
+
+
+def _git_revision() -> str | None:
+    env_revision = (
+        os.getenv("MSG_TO_PDF_APP_REVISION")
+        or os.getenv("MSG_TO_PDF_SOURCE_REVISION")
+        or ""
+    ).strip()
+    if env_revision:
+        return env_revision
+
+    release_info = _read_release_info()
+    for key in ("sourceRevision", "commit", "gitCommit"):
+        value = release_info.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    repo_root = PACKAGE_ROOT.parents[1]
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return None
+    revision = result.stdout.strip()
+    return revision or None
+
+
+def build_version_payload() -> dict[str, object]:
+    release_info = _read_release_info()
+    payload: dict[str, object] = {
+        "appName": APP_NAME,
+        "appVersion": _package_version(),
+        "sourceRevision": _git_revision(),
+    }
+    for key in ("sourceBranch", "deployedAt", "deployedBy"):
+        value = release_info.get(key)
+        if isinstance(value, str) and value.strip():
+            payload[key] = value.strip()
+    return payload
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -629,7 +694,16 @@ def create_app() -> FastAPI:
     @app.get("/api/health")
     async def health() -> dict[str, object]:
         stage_store: StageStore = app.state.stage_store
-        return {"ok": True, "queuedCount": stage_store.count(), "maxFiles": MAX_FILES_PER_BATCH}
+        return {
+            "ok": True,
+            "queuedCount": stage_store.count(),
+            "maxFiles": MAX_FILES_PER_BATCH,
+            **build_version_payload(),
+        }
+
+    @app.get("/api/version")
+    async def app_version() -> dict[str, object]:
+        return build_version_payload()
 
     @app.get("/api/settings")
     async def settings() -> dict[str, object]:
