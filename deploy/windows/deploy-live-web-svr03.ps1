@@ -69,7 +69,7 @@ import ssl
 import sys
 import urllib.request
 
-base_url = sys.argv[1].rstrip("/")
+base_url = sys.argv[1].rstrip('/')
 app_root = pathlib.Path(sys.argv[2])
 expected_revision = sys.argv[3]
 opener = urllib.request.build_opener(
@@ -80,26 +80,26 @@ opener = urllib.request.build_opener(
 def fetch(path):
     return opener.open(base_url + path, timeout=20).read()
 
-health = json.loads(fetch("/api/health").decode("utf-8"))
-settings = json.loads(fetch("/api/settings").decode("utf-8"))
-version = json.loads(fetch("/api/version").decode("utf-8"))
-if health.get("ok") is not True:
+health = json.loads(fetch('/api/health').decode('utf-8'))
+settings = json.loads(fetch('/api/settings').decode('utf-8'))
+version = json.loads(fetch('/api/version').decode('utf-8'))
+if health.get('ok') is not True:
     raise SystemExit(f"Health did not report ok=true: {health}")
-if settings.get("serverMode") is not True:
+if settings.get('serverMode') is not True:
     raise SystemExit(f"Settings did not report hosted serverMode=true: {settings}")
-if not version.get("sourceRevision"):
+if not version.get('sourceRevision'):
     raise SystemExit(f"Version payload did not include sourceRevision: {version}")
-if expected_revision != "unknown" and version.get("sourceRevision") != expected_revision:
+if expected_revision != 'unknown' and version.get('sourceRevision') != expected_revision:
     raise SystemExit(
         f"Version payload revision did not match deployment: "
         f"expected={expected_revision} actual={version.get('sourceRevision')}"
     )
 
 pairs = [
-    ("index.html", "/", app_root / "src" / "msg_to_pdf_dropzone" / "web_ui" / "index.html"),
-    ("app.css", "/static/app.css?v=filename-panel-1", app_root / "src" / "msg_to_pdf_dropzone" / "web_ui" / "app.css"),
-    ("app.js", "/static/app.js?v=result-row-actions-2", app_root / "src" / "msg_to_pdf_dropzone" / "web_ui" / "app.js"),
-    ("dropzone_controller.js", "/static/dropzone_controller.js", app_root / "src" / "msg_to_pdf_dropzone" / "web_ui" / "dropzone_controller.js"),
+    ('index.html', '/', app_root / 'src' / 'msg_to_pdf_dropzone' / 'web_ui' / 'index.html'),
+    ('app.css', '/static/app.css?v=filename-panel-1', app_root / 'src' / 'msg_to_pdf_dropzone' / 'web_ui' / 'app.css'),
+    ('app.js', '/static/app.js?v=result-row-actions-2', app_root / 'src' / 'msg_to_pdf_dropzone' / 'web_ui' / 'app.js'),
+    ('dropzone_controller.js', '/static/dropzone_controller.js', app_root / 'src' / 'msg_to_pdf_dropzone' / 'web_ui' / 'dropzone_controller.js'),
 ]
 for label, path, local_path in pairs:
     remote = fetch(path)
@@ -111,7 +111,7 @@ for label, path, local_path in pairs:
             f"local={hashlib.sha256(local).hexdigest()[:12]}"
         )
 
-print(json.dumps({"health": health, "settings": settings, "version": version}, indent=2))
+print(json.dumps({'health': health, 'settings': settings, 'version': version}, indent=2))
 '@
 
     & $PythonExe -c $validationScript $Url $Root $ExpectedRevision
