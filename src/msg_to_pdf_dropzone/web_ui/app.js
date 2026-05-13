@@ -156,6 +156,8 @@ const state = {
   pendingRemovalsById: {},
   outputDir: "",
   outputDirLabel: "",
+  browserOutputDirectoryHandle: null,
+  browserOutputDirLabel: "",
   recentDestinations: [],
   recentlyQueuedIds: new Set(),
   activeConvertIds: [],
@@ -310,7 +312,38 @@ function rememberDestination(pathValue) {
   saveRecentDestinations();
 }
 
+function isHostedBrowserOutputMode() {
+  return state.serverMode && !state.capabilities.nativeOutputPicker;
+}
+
+function browserDirectoryPickerAvailable() {
+  return isHostedBrowserOutputMode() && typeof window.showDirectoryPicker === "function" && window.isSecureContext !== false;
+}
+
+function outputDestinationReady() {
+  if (state.capabilities.nativeOutputPicker) {
+    return Boolean(state.outputDir);
+  }
+  if (browserDirectoryPickerAvailable()) {
+    return Boolean(state.outputDir && state.browserOutputDirectoryHandle);
+  }
+  return Boolean(state.outputDir);
+}
+
+function serverCanOpenOutputFolder() {
+  return Boolean(state.outputDir) && !isHostedBrowserOutputMode();
+}
+
 function defaultStatusDetail() {
+  if (isHostedBrowserOutputMode()) {
+    if (state.browserOutputDirLabel) {
+      return `Saving copies to ${state.browserOutputDirLabel}.`;
+    }
+    if (browserDirectoryPickerAvailable()) {
+      return "Click Convert to PDF and choose a local save folder in your browser.";
+    }
+    return "Converted PDFs will be available from the result list.";
+  }
   if (state.outputDir) {
     return `Saving to ${state.outputDir}`;
   }
@@ -321,7 +354,18 @@ function defaultStatusDetail() {
 }
 
 function formatDestinationLabel() {
-  return state.outputDirLabel || state.outputDir || "Choose a save folder before conversion.";
+  if (state.browserOutputDirLabel) {
+    return state.browserOutputDirLabel;
+  }
+  if (isHostedBrowserOutputMode()) {
+    return browserDirectoryPickerAvailable()
+      ? "Choose a local folder before conversion."
+      : "PDFs will be available for download.";
+  }
+  if (state.outputDirLabel || state.outputDir) {
+    return state.outputDirLabel || state.outputDir;
+  }
+  return "Choose a save folder before conversion.";
 }
 
 function refreshHostingCopy() {
@@ -334,7 +378,13 @@ function refreshHostingCopy() {
       : "Upload <code>.msg</code> files, then convert them to PDFs with the selected filename style.";
   }
   if (elements.workflowBody) {
-    elements.workflowBody.textContent = state.outputDir
+    elements.workflowBody.textContent = isHostedBrowserOutputMode()
+      ? state.browserOutputDirLabel
+        ? `Upload .msg files or drag them into the page. Converted PDFs will be copied to ${state.browserOutputDirLabel}.`
+        : browserDirectoryPickerAvailable()
+          ? "Upload .msg files or drag them into the page. When you are ready, click Convert to PDF and choose a local save folder."
+          : "Upload .msg files or drag them into the page. Converted PDFs will be available from the result list."
+      : state.outputDir
       ? `Upload .msg files or drag them into the page. Converted PDFs will be saved to ${state.outputDir}.`
       : state.capabilities.outlookImport
         ? "Drag from Outlook or click to browse. When you are ready, click Convert to PDF and choose where to save the files."
@@ -691,8 +741,11 @@ function renderBatchReview({ shouldShowResult, destinationKnown }) {
       const failure = isSaved ? null : failureExplanation(item.error);
       const detail = isSaved ? "Saved PDF" : failure.reason;
       const action = failure?.action || "";
-      const revealAction = isSaved && item.outputPath
+      const revealAction = isSaved && item.outputPath && !isHostedBrowserOutputMode()
         ? `<button class="result-review-reveal button button-ghost" type="button" data-result-reveal-path="${escapeHtml(item.outputPath)}" data-result-reveal-name="${escapeHtml(primary)}" data-testid="result-reveal-file" aria-label="Show ${escapeHtml(primary)} in output folder"><span class="folder-open-icon" aria-hidden="true"></span><span data-result-reveal-label>Show</span></button>`
+        : "";
+      const downloadAction = isSaved && item.outputPath && isHostedBrowserOutputMode()
+        ? `<button class="result-review-reveal result-review-download button button-ghost" type="button" data-result-download-id="${escapeHtml(item.id)}" data-result-download-name="${escapeHtml(primary)}" data-testid="result-download-file" aria-label="Download ${escapeHtml(primary)}"><span class="folder-open-icon" aria-hidden="true"></span><span data-result-reveal-label>Download</span></button>`
         : "";
       return `
         <div class="result-review-row is-${isSaved ? "saved" : "retry"}">
@@ -706,7 +759,7 @@ function renderBatchReview({ shouldShowResult, destinationKnown }) {
             <span class="result-review-detail">${escapeHtml(detail)}</span>
             ${action ? `<small>${escapeHtml(action)}</small>` : ""}
           </div>
-          ${revealAction}
+          ${revealAction || downloadAction}
         </div>
       `;
     })
@@ -749,7 +802,7 @@ function buildQueueTerminalSummary(summary, { isTerminalBatch, visibleRows }) {
 
 function renderOperations() {
   const summary = summarizeBatch();
-  const destinationKnown = Boolean(state.outputDir);
+  const destinationKnown = outputDestinationReady();
   const hasQueuedItems = summary.queued > 0;
   const isProcessing = state.isBusy || summary.activelyProcessingCount > 0;
   const isComplete = hasQueuedItems && summary.complete === summary.queued && summary.failed === 0;
@@ -767,6 +820,10 @@ function renderOperations() {
 
   elements.destinationInlineValue.textContent = destinationKnown
     ? formatDestinationLabel()
+    : isHostedBrowserOutputMode()
+      ? browserDirectoryPickerAvailable()
+        ? "Choose a local folder when you convert."
+        : "Download PDFs after conversion."
     : !state.capabilities.nativeOutputPicker
       ? "Server-managed output folder."
       : "Choose a destination when you convert.";
@@ -813,7 +870,7 @@ function renderOperations() {
     elements.resultBanner.classList.toggle("is-attention", isAttention);
     renderBatchReview({ shouldShowResult, destinationKnown });
     if (elements.resultOpenOutputButton) {
-      const canOpenOutput = destinationKnown && summary.complete > 0;
+      const canOpenOutput = destinationKnown && summary.complete > 0 && serverCanOpenOutputFolder();
       elements.resultOpenOutputButton.hidden = !canOpenOutput;
       elements.resultOpenOutputButton.disabled = !canOpenOutput;
     }
@@ -831,7 +888,11 @@ function renderOperations() {
           ? `Every queued email has been converted and saved to ${formatDestinationLabel()}.`
           : "Every queued email has been converted successfully.";
         if (elements.resultGuidance) {
-          elements.resultGuidance.textContent = destinationKnown
+          elements.resultGuidance.textContent = isHostedBrowserOutputMode()
+            ? state.browserOutputDirLabel
+              ? "PDFs were copied to your selected folder. Use Download if you need another copy."
+              : "Use Download on each saved PDF to keep a local copy."
+            : destinationKnown
             ? "Open the output folder to review the PDFs, or start a new batch when you are ready."
             : "The full batch is complete. Start a new batch when you are ready.";
         }
@@ -847,7 +908,7 @@ function renderOperations() {
 
   if (elements.openOutputFolderButton) {
     const resultPanelOwnsOutputAction = isComplete || isAttention;
-    const shouldShowOpenOutput = destinationKnown && !isProcessing && summary.complete > 0 && !resultPanelOwnsOutputAction;
+    const shouldShowOpenOutput = destinationKnown && serverCanOpenOutputFolder() && !isProcessing && summary.complete > 0 && !resultPanelOwnsOutputAction;
     elements.openOutputFolderButton.hidden = !shouldShowOpenOutput;
     elements.openOutputFolderButton.disabled = !shouldShowOpenOutput;
   }
@@ -984,7 +1045,17 @@ function updateReadinessSignals(summary, { destinationKnown, isProcessing, isCom
   }
 
   if (!state.capabilities.nativeOutputPicker) {
-    setReadinessStep(elements.readinessDestination, elements.readinessDestinationValue, "done", "Managed");
+    if (browserDirectoryPickerAvailable()) {
+      if (state.browserOutputDirectoryHandle) {
+        setReadinessStep(elements.readinessDestination, elements.readinessDestinationValue, "done", lastPathSegment(state.browserOutputDirLabel) || "Selected");
+      } else if (summary.queued && !isComplete) {
+        setReadinessStep(elements.readinessDestination, elements.readinessDestinationValue, "active", "Choose now");
+      } else {
+        setReadinessStep(elements.readinessDestination, elements.readinessDestinationValue, "pending", "Choose later");
+      }
+    } else {
+      setReadinessStep(elements.readinessDestination, elements.readinessDestinationValue, "done", "Download");
+    }
   } else if (destinationKnown) {
     setReadinessStep(elements.readinessDestination, elements.readinessDestinationValue, "done", lastPathSegment(formatDestinationLabel()) || "Selected");
   } else if (summary.queued && !isComplete) {
@@ -1007,6 +1078,14 @@ function updateReadinessSignals(summary, { destinationKnown, isProcessing, isCom
 }
 
 async function openOutputFolder() {
+  if (isHostedBrowserOutputMode()) {
+    addStatus(
+      state.browserOutputDirLabel ? "PDFs were saved to your selected folder." : "Output folders cannot be opened from the hosted page.",
+      state.browserOutputDirLabel || "Use the Download button beside a saved PDF.",
+      "neutral",
+    );
+    return;
+  }
   if (!state.outputDir) {
     addStatus("No output folder is selected yet.", "Convert a batch first, then open the saved destination.", "error");
     return;
@@ -1033,6 +1112,107 @@ async function revealOutputFile(outputPath, outputName = "PDF") {
     body: JSON.stringify({ output_path: normalizedPath }),
   });
   addStatus("PDF shown in folder.", outputName, "success");
+}
+
+function outputFileDownloadPath(itemId) {
+  return `/api/output-file/${encodeURIComponent(itemId)}`;
+}
+
+function safeOutputFileName(item, fallbackName = "converted.pdf") {
+  const rawName = String(queueOutputName(item) || fallbackName || "converted.pdf").trim();
+  const fileName = lastPathSegment(rawName).replace(/[\\/:*?"<>|]+/g, "_").trim();
+  return fileName || "converted.pdf";
+}
+
+async function fetchOutputBlob(itemId) {
+  const response = await fetch(outputFileDownloadPath(itemId));
+  if (!response.ok) {
+    let detail = response.statusText || "PDF download failed";
+    try {
+      const payload = await response.json();
+      detail = payload?.detail || detail;
+    } catch {
+      // Keep the HTTP status text.
+    }
+    throw new Error(detail);
+  }
+  return response.blob();
+}
+
+function triggerBlobDownload(blob, fileName) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  link.style.display = "none";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+
+async function saveOutputItemToBrowserFolder(item) {
+  if (!state.browserOutputDirectoryHandle) {
+    throw new Error("Choose a browser save folder before saving PDFs.");
+  }
+  const fileName = safeOutputFileName(item);
+  const blob = await fetchOutputBlob(item.id);
+  const fileHandle = await state.browserOutputDirectoryHandle.getFileHandle(fileName, { create: true });
+  const writable = await fileHandle.createWritable();
+  try {
+    await writable.write(blob);
+  } finally {
+    await writable.close();
+  }
+  return fileName;
+}
+
+async function downloadOutputFile(itemId, outputName = "PDF") {
+  const item = state.items.find((candidate) => candidate.id === itemId);
+  const fileName = item ? safeOutputFileName(item, outputName) : String(outputName || "converted.pdf");
+  const blob = await fetchOutputBlob(itemId);
+  triggerBlobDownload(blob, fileName);
+  addStatus("PDF download started.", fileName, "success");
+}
+
+async function deliverConvertedFiles(ids) {
+  if (!isHostedBrowserOutputMode()) {
+    return { mode: "server", saved: 0, failed: 0 };
+  }
+
+  const idSet = new Set(ids);
+  const completedItems = state.items.filter((item) => idSet.has(item.id) && item.stage === "complete" && item.outputPath);
+  if (!completedItems.length) {
+    return { mode: "browser", saved: 0, failed: 0 };
+  }
+
+  if (!state.browserOutputDirectoryHandle) {
+    return { mode: "download", saved: 0, failed: 0 };
+  }
+
+  let saved = 0;
+  const failures = [];
+  for (const item of completedItems) {
+    try {
+      await saveOutputItemToBrowserFolder(item);
+      saved += 1;
+    } catch (error) {
+      failures.push({ item, error });
+    }
+  }
+
+  if (saved) {
+    addStatus(
+      `${saved} PDF${saved === 1 ? "" : "s"} copied to your save folder.`,
+      state.browserOutputDirLabel || "Selected browser folder",
+      "success",
+    );
+  }
+  failures.forEach(({ item, error }) => {
+    addStatus("A PDF could not be copied to your folder.", `${safeOutputFileName(item)}: ${error.message}`, "error");
+  });
+
+  return { mode: "browser-folder", saved, failed: failures.length };
 }
 
 function setRevealButtonFeedback(button, { label, tone }) {
@@ -1373,7 +1553,7 @@ function updateActionState() {
   const convertibleCount = state.items.filter((item) => item.stage !== "complete").length;
   const hasItems = queuedCount > 0;
   const busy = state.isBusy;
-  const outputReady = Boolean(state.outputDir);
+  const outputReady = outputDestinationReady();
   const completedDuringRun = state.activeConvertIds.length
     ? state.activeConvertIds.filter((id) => {
         const item = state.items.find((candidate) => candidate.id === id);
@@ -1385,15 +1565,16 @@ function updateActionState() {
   elements.clearButton.disabled = busy || !hasItems;
   elements.convertButton.disabled = busy || !convertibleCount;
   if (elements.chooseFolderButton) {
-    elements.chooseFolderButton.disabled = busy || !state.capabilities.nativeOutputPicker;
-    elements.chooseFolderButton.textContent = state.capabilities.nativeOutputPicker ? "Choose Save Folder" : "Server Save Folder";
+    const canChooseFolder = state.capabilities.nativeOutputPicker || browserDirectoryPickerAvailable();
+    elements.chooseFolderButton.disabled = busy || !canChooseFolder;
+    elements.chooseFolderButton.textContent = canChooseFolder ? "Choose Save Folder" : "Browser Downloads";
   }
 
   if (busy && state.activeConvertIds.length) {
     elements.convertButton.textContent = `Converting ${completedDuringRun}/${state.activeConvertIds.length}...`;
   } else if (!convertibleCount) {
     elements.convertButton.textContent = "Convert to PDF";
-  } else if (!outputReady && !state.capabilities.nativeOutputPicker) {
+  } else if (!outputReady && !state.capabilities.nativeOutputPicker && !browserDirectoryPickerAvailable()) {
     elements.convertButton.textContent = "Output Folder Required";
   } else {
     elements.convertButton.textContent = `Convert ${convertibleCount} File${convertibleCount === 1 ? "" : "s"} to PDF`;
@@ -1692,6 +1873,10 @@ async function loadSettings() {
   };
   state.outputDir = payload.defaultOutputDir || state.outputDir;
   state.outputDirLabel = payload.defaultOutputDirLabel || state.outputDirLabel;
+  if (!isHostedBrowserOutputMode()) {
+    state.browserOutputDirectoryHandle = null;
+    state.browserOutputDirLabel = "";
+  }
   refreshHostingCopy();
   setDropzoneCopy("default");
   renderStatus();
@@ -1757,7 +1942,72 @@ async function uploadFiles(files, { sourceHint = "upload" } = {}) {
   }
 }
 
+async function requestBrowserDirectoryWritePermission(directoryHandle) {
+  const options = { mode: "readwrite" };
+  if (typeof directoryHandle.queryPermission === "function") {
+    const queryResult = await directoryHandle.queryPermission(options);
+    if (queryResult === "granted") {
+      return true;
+    }
+  }
+  if (typeof directoryHandle.requestPermission === "function") {
+    return (await directoryHandle.requestPermission(options)) === "granted";
+  }
+  return true;
+}
+
+async function chooseBrowserOutputFolder({ silentCancel = false } = {}) {
+  if (!state.outputDir) {
+    if (!silentCancel) {
+      addStatus("Server output storage is not configured.", "Conversion cannot start until the hosted output location is available.", "error");
+    }
+    return false;
+  }
+
+  if (!browserDirectoryPickerAvailable()) {
+    if (!silentCancel) {
+      addStatus("Browser folder selection is unavailable.", "Converted PDFs will be available from the result list.", "neutral");
+    }
+    return { outputDir: state.outputDir, outputDirLabel: state.outputDirLabel };
+  }
+
+  let directoryHandle = null;
+  try {
+    directoryHandle = await window.showDirectoryPicker({ mode: "readwrite" });
+  } catch (error) {
+    if (!silentCancel) {
+      const isCancel = error?.name === "AbortError";
+      addStatus(
+        isCancel ? "Save folder selection was cancelled." : "Could not choose the save folder.",
+        isCancel ? "Choose a folder when you are ready to convert." : error.message,
+        isCancel ? "neutral" : "error",
+      );
+    }
+    return false;
+  }
+
+  const hasPermission = await requestBrowserDirectoryWritePermission(directoryHandle);
+  if (!hasPermission) {
+    if (!silentCancel) {
+      addStatus("Folder permission was not granted.", "Choose a folder and allow write access before converting.", "error");
+    }
+    return false;
+  }
+
+  state.browserOutputDirectoryHandle = directoryHandle;
+  state.browserOutputDirLabel = directoryHandle.name || "Selected browser folder";
+  refreshHostingCopy();
+  renderOperations();
+  addStatus("Save folder selected.", state.browserOutputDirLabel, "success");
+  updateActionState();
+  return { outputDir: state.outputDir, outputDirLabel: state.browserOutputDirLabel };
+}
+
 async function chooseOutputFolder({ silentCancel = false } = {}) {
+  if (isHostedBrowserOutputMode()) {
+    return chooseBrowserOutputFolder({ silentCancel });
+  }
+
   const payload = await api("/api/choose-output-folder", { method: "POST" });
   if (!payload.outputDir) {
     if (payload.disabled) {
@@ -1788,7 +2038,7 @@ async function convertQueue() {
     return;
   }
 
-  if (state.capabilities.nativeOutputPicker) {
+  if (state.capabilities.nativeOutputPicker || browserDirectoryPickerAvailable()) {
     const selected = await chooseOutputFolder({ silentCancel: false });
     if (!selected) {
       addStatus("Choose a destination to continue.", "Conversion has not started yet.", "error");
@@ -1805,7 +2055,7 @@ async function convertQueue() {
   convertibleItems.forEach((item) => activateQueueProgress(item.taskId));
   renderQueue();
   startQueueProgressLoop();
-  addStatus(`Starting conversion for ${ids.length} file(s).`, state.outputDir, "neutral");
+  addStatus(`Starting conversion for ${ids.length} file(s).`, formatDestinationLabel(), "neutral");
 
   try {
     const payload = await api("/api/convert", {
@@ -1814,8 +2064,14 @@ async function convertQueue() {
       body: JSON.stringify({ ids, output_dir: state.outputDir, filename_style: state.filenameStyle }),
     });
     await loadQueue();
+    const delivery = await deliverConvertedFiles(ids);
     if (payload.convertedFiles?.length) {
-      addStatus(`Converted ${payload.convertedFiles.length} file(s).`, "Your PDFs have been saved.", "success");
+      const detail = delivery.mode === "browser-folder"
+        ? `${delivery.saved} local cop${delivery.saved === 1 ? "y was" : "ies were"} saved to ${formatDestinationLabel()}.`
+        : delivery.mode === "download"
+          ? "Use the Download button beside each saved PDF to keep a local copy."
+          : "Your PDFs have been saved.";
+      addStatus(`Converted ${payload.convertedFiles.length} file(s).`, detail, "success");
       celebrateQueueCompletion();
     }
     if (payload.errors?.length) {
@@ -1833,7 +2089,7 @@ async function retryItem(id) {
     return;
   }
 
-  if (!state.outputDir) {
+  if (!outputDestinationReady()) {
     const selected = await chooseOutputFolder({ silentCancel: false });
     if (!selected) {
       addStatus("Choose a destination before retrying.", "Retry has not started yet.", "error");
@@ -1854,8 +2110,12 @@ async function retryItem(id) {
       body: JSON.stringify({ ids: [id], output_dir: state.outputDir, filename_style: state.filenameStyle }),
     });
     await loadQueue();
+    const delivery = await deliverConvertedFiles([id]);
     if (payload.convertedFiles?.length) {
-      addStatus("Retry succeeded.", `${target.name} was converted successfully.`, "success");
+      const detail = delivery.mode === "browser-folder"
+        ? `${target.name} was converted and copied to ${formatDestinationLabel()}.`
+        : `${target.name} was converted successfully.`;
+      addStatus("Retry succeeded.", detail, "success");
       celebrateQueueCompletion();
     }
     if (payload.errors?.length) {
@@ -1874,7 +2134,7 @@ async function retryFailedItems() {
     return;
   }
 
-  if (!state.outputDir) {
+  if (!outputDestinationReady()) {
     const selected = await chooseOutputFolder({ silentCancel: false });
     if (!selected) {
       addStatus("Choose a destination before retrying.", "Retry has not started yet.", "error");
@@ -1896,8 +2156,12 @@ async function retryFailedItems() {
       body: JSON.stringify({ ids, output_dir: state.outputDir, filename_style: state.filenameStyle }),
     });
     await loadQueue();
+    const delivery = await deliverConvertedFiles(ids);
     if (payload.convertedFiles?.length) {
-      addStatus(`Recovered ${payload.convertedFiles.length} file(s).`, "Recovered PDFs have been saved.", "success");
+      const detail = delivery.mode === "browser-folder"
+        ? `Recovered PDFs were copied to ${formatDestinationLabel()}.`
+        : "Recovered PDFs have been saved.";
+      addStatus(`Recovered ${payload.convertedFiles.length} file(s).`, detail, "success");
       celebrateQueueCompletion();
     }
     if (payload.errors?.length) {
@@ -2094,6 +2358,24 @@ function installFeedbackEvents() {
   elements.resultOpenOutputButton?.addEventListener("click", openOutputFolderFromButton);
   elements.resultReviewList?.addEventListener("click", async (event) => {
     const clickTarget = event.target instanceof Element ? event.target : null;
+    const downloadButton = clickTarget?.closest("[data-result-download-id]");
+    if (downloadButton instanceof HTMLButtonElement && !state.isBusy) {
+      downloadButton.disabled = true;
+      try {
+        await downloadOutputFile(downloadButton.dataset.resultDownloadId, downloadButton.dataset.resultDownloadName);
+        setRevealButtonFeedback(downloadButton, { label: "Downloaded", tone: "confirmed" });
+      } catch (error) {
+        setRevealButtonFeedback(downloadButton, { label: "Unavailable", tone: "error" });
+        addStatus("The PDF could not be downloaded.", error.message, "error");
+      } finally {
+        window.setTimeout(() => {
+          downloadButton.disabled = false;
+          setRevealButtonFeedback(downloadButton, { label: "Download", tone: "" });
+        }, 1800);
+      }
+      return;
+    }
+
     const revealButton = clickTarget?.closest("[data-result-reveal-path]");
     if (!revealButton || state.isBusy) {
       return;

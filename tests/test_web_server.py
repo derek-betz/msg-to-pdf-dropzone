@@ -155,6 +155,11 @@ def test_web_ui_progress_model_keeps_pdf_render_near_completion() -> None:
     assert "data-result-reveal-path" in source
     assert "data-result-reveal-label" in source
     assert "function revealOutputFile" in source
+    assert "function chooseBrowserOutputFolder" in source
+    assert "browserOutputDirectoryHandle" in source
+    assert "window.showDirectoryPicker" in source
+    assert "function downloadOutputFile" in source
+    assert "/api/output-file/" in source
     assert "function setRevealButtonFeedback" in source
     assert '"/api/reveal-output-file"' in source
     assert 'class="result-review-row is-${isSaved ? "saved" : "retry"}"' in source
@@ -777,6 +782,46 @@ def test_reveal_output_file_endpoint_invokes_helper(monkeypatch, tmp_path: Path)
     assert response.status_code == 200
     assert response.json()["ok"] is True
     assert revealed == [str(output_path)]
+
+
+def test_output_file_endpoint_serves_completed_pdf(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("msg_to_pdf_dropzone.web_server.STAGING_DIR", tmp_path / "staging")
+    converted_path = tmp_path / "output" / "saved.pdf"
+
+    def fake_convert(msg_paths, output_dir, event_sink=None, task_ids_by_source_path=None, **_kwargs) -> ConversionResult:
+        converted_path.parent.mkdir(parents=True, exist_ok=True)
+        converted_path.write_bytes(b"%PDF-test")
+        task_id = task_ids_by_source_path[msg_paths[0].resolve()]
+        emit_task_event(
+            event_sink,
+            task_id=task_id,
+            stage="complete",
+            file_name=msg_paths[0].name,
+            success=True,
+            meta={"outputPath": str(converted_path), "outputName": converted_path.name},
+        )
+        return ConversionResult(requested_count=1, converted_files=[converted_path], total_seconds=0.25)
+
+    monkeypatch.setattr("msg_to_pdf_dropzone.web_server.convert_msg_files", fake_convert)
+    client = TestClient(create_app())
+
+    upload = client.post(
+        "/api/upload",
+        files=[("files", ("sample.msg", BytesIO(b"msg-bytes"), "application/vnd.ms-outlook"))],
+    )
+    queued_item = upload.json()["items"][0]
+
+    convert = client.post(
+        "/api/convert",
+        json={"ids": [queued_item["id"]], "output_dir": str(tmp_path / "output")},
+    )
+    assert convert.status_code == 200
+
+    response = client.get(f"/api/output-file/{queued_item['id']}")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/pdf")
+    assert response.content == b"%PDF-test"
 
 
 def test_publish_preview_sequence_emits_stage_events(monkeypatch) -> None:

@@ -347,6 +347,22 @@ class StageStore:
             raise HTTPException(status_code=400, detail="Selected .msg files are already complete.")
         return convertible
 
+    def resolve_output_file(self, item_id: str) -> Path:
+        with self._lock:
+            item = self._items.get(item_id)
+            if item is None:
+                raise HTTPException(status_code=404, detail="The converted PDF is no longer in the active queue.")
+            output_path = item.output_path
+            stage = item.stage
+
+        if stage != "complete" or not output_path:
+            raise HTTPException(status_code=404, detail="The selected queue item does not have a saved PDF yet.")
+
+        target = Path(output_path).expanduser()
+        if target.suffix.lower() != ".pdf" or not target.exists() or not target.is_file():
+            raise HTTPException(status_code=404, detail="The saved PDF is unavailable.")
+        return target
+
     def apply_task_event(self, event: TaskEvent) -> None:
         output_name = None
         output_path = None
@@ -902,6 +918,11 @@ def create_app() -> FastAPI:
         if not opened:
             raise HTTPException(status_code=404, detail="The selected PDF is unavailable.")
         return {"ok": True, "outputPath": output_path}
+
+    @app.get("/api/output-file/{item_id}")
+    async def download_output_file(item_id: str) -> FileResponse:
+        output_path = app.state.stage_store.resolve_output_file(item_id)
+        return FileResponse(output_path, media_type="application/pdf", filename=output_path.name)
 
     @app.post("/api/preview-mailroom")
     async def preview_mailroom(request: PreviewRequest) -> dict[str, object]:
