@@ -15,6 +15,7 @@ def test_export_msg_to_web_archive_uses_temp_copy(monkeypatch, tmp_path: Path) -
     msg_path.write_bytes(b"msg-bytes")
     original_hash = hashlib.sha256(msg_path.read_bytes()).hexdigest()
     output_path = tmp_path / "sample.mht"
+    temp_root = tmp_path / "runtime-temp"
     opened_paths: list[Path] = []
 
     class FakeItem:
@@ -46,6 +47,7 @@ def test_export_msg_to_web_archive_uses_temp_copy(monkeypatch, tmp_path: Path) -
     monkeypatch.setitem(sys.modules, "pythoncom", pythoncom_module)
     monkeypatch.setitem(sys.modules, "win32com", win32com_module)
     monkeypatch.setitem(sys.modules, "win32com.client", client_module)
+    monkeypatch.setenv("MSG_TO_PDF_TEMP_DIR", str(temp_root))
 
     result = worker.export_msg_to_web_archive(msg_path, output_path)
 
@@ -54,6 +56,7 @@ def test_export_msg_to_web_archive_uses_temp_copy(monkeypatch, tmp_path: Path) -
     assert opened_paths
     assert opened_paths[0] != msg_path
     assert opened_paths[0].name == msg_path.name
+    assert opened_paths[0].parent.parent == temp_root
     assert not opened_paths[0].exists()
     assert hashlib.sha256(msg_path.read_bytes()).hexdigest() == original_hash
 

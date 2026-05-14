@@ -3,13 +3,14 @@ from __future__ import annotations
 from collections.abc import Mapping
 import base64
 from dataclasses import dataclass, field
+from datetime import datetime
 import os
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
-from datetime import datetime
+from uuid import uuid4
 from html import escape, unescape
 from pathlib import Path
 from time import perf_counter, sleep
@@ -72,6 +73,67 @@ def _get_render_strategy() -> str:
 def _allow_remote_images() -> bool:
     raw_value = os.environ.get("MSG_TO_PDF_ALLOW_REMOTE_IMAGES", "").strip().lower()
     return raw_value in {"1", "true", "yes", "on"}
+
+
+def _writable_temp_root(candidate: Path) -> Path | None:
+    try:
+        candidate.mkdir(parents=True, exist_ok=True)
+        probe_path = candidate / f".write-test-{os.getpid()}-{id(candidate)}.tmp"
+        probe_path.write_text("ok", encoding="utf-8")
+        probe_path.unlink(missing_ok=True)
+    except OSError:
+        return None
+    return candidate
+
+
+def _candidate_temp_roots(output_path: Path | None = None) -> list[Path | None]:
+    roots: list[Path | None] = []
+    configured_temp = os.environ.get("MSG_TO_PDF_TEMP_DIR", "").strip()
+    if configured_temp:
+        roots.append(Path(configured_temp).expanduser())
+
+    staging_dir = os.environ.get("MSG_TO_PDF_STAGING_DIR", "").strip()
+    if staging_dir:
+        roots.append(Path(staging_dir).expanduser().parent / "temp")
+
+    if output_path is not None:
+        roots.append(output_path.parent / ".msg-to-pdf-temp")
+
+    roots.append(Path.cwd() / ".msg-to-pdf-temp")
+    roots.append(Path(tempfile.gettempdir()) / "msg-to-pdf-dropzone")
+    return roots
+
+
+def _create_inherited_acl_temp_dir(root: Path, prefix: str) -> Path:
+    for _ in range(100):
+        temp_dir = root / f"{prefix}{uuid4().hex[:10]}"
+        try:
+            temp_dir.mkdir(parents=False, exist_ok=False)
+        except FileExistsError:
+            continue
+        return temp_dir
+    raise FileExistsError(f"Could not create a unique temporary directory under {root}")
+
+
+def _make_temp_dir(prefix: str, *, output_path: Path | None = None) -> Path:
+    last_error: OSError | None = None
+    for root in _candidate_temp_roots(output_path):
+        try:
+            if root is None:
+                continue
+            writable_root = _writable_temp_root(root)
+            if writable_root is None:
+                continue
+            temp_dir = _create_inherited_acl_temp_dir(writable_root, prefix)
+            if _writable_temp_root(temp_dir) is not None:
+                return temp_dir
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        except OSError as exc:
+            last_error = exc
+            continue
+    if last_error is not None:
+        raise last_error
+    raise OSError("Could not create a writable temporary conversion directory.")
 
 
 def _prefer_html_for_inline_images(record: EmailRecord) -> bool:
@@ -516,7 +578,7 @@ def _try_write_pdf_via_outlook_and_edge(msg_path: Path, output_path: Path) -> bo
     if not msg_path.exists():
         return False
 
-    temp_dir = Path(tempfile.mkdtemp(prefix="msg-to-pdf-mht-"))
+    temp_dir = _make_temp_dir("msg-to-pdf-mht-", output_path=output_path)
     mht_path = temp_dir / "email.mht"
     try:
         command = [
@@ -526,7 +588,16 @@ def _try_write_pdf_via_outlook_and_edge(msg_path: Path, output_path: Path) -> bo
             str(msg_path),
             str(mht_path),
         ]
-        result = subprocess.run(command, capture_output=True, text=True, timeout=120, check=False)
+        worker_env = os.environ.copy()
+        worker_env.setdefault("MSG_TO_PDF_TEMP_DIR", str(temp_dir.parent))
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+            env=worker_env,
+        )
         if result.returncode != 0:
             return False
         return _print_web_document_via_edge(mht_path, output_path)
@@ -540,7 +611,7 @@ def _try_write_pdf_via_edge_html(html_document: str, output_path: Path) -> bool:
     if os.name != "nt":
         return False
 
-    temp_dir = Path(tempfile.mkdtemp(prefix="msg-to-pdf-html-"))
+    temp_dir = _make_temp_dir("msg-to-pdf-html-", output_path=output_path)
     html_path = temp_dir / "email.html"
     html_path.write_text(html_document, encoding="utf-8")
     try:

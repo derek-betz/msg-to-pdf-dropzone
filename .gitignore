@@ -4,12 +4,14 @@ __pycache__/
 *.pyo
 *.pyd
 .pytest_cache/
+.pytest-tmp/
 dist/
 build/
 *.egg-info/
 *.log
 .tmp-*.jsonl
 .local-browser-run/
+.local-hosted-test/
 .local-corpus-profiles/
 .local-web-svr03-test/
 .DS_Store

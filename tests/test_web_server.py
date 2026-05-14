@@ -84,6 +84,11 @@ def test_index_includes_feedback_modal(monkeypatch, tmp_path: Path) -> None:
 
     assert response.status_code == 200
     assert "Send Feedback" in response.text
+    assert "Add MSG files" in response.text
+    assert "Confirm names" in response.text
+    assert "Convert and download" in response.text
+    assert "PDFs download individually through the browser." in response.text
+    assert "Choose one save folder so the full batch lands in one place." not in response.text
     assert 'id="feedback-modal"' in response.text
     assert 'id="feedback-category"' in response.text
     assert 'aria-label="Batch readiness"' in response.text
@@ -157,8 +162,18 @@ def test_web_ui_progress_model_keeps_pdf_render_near_completion() -> None:
     assert "function revealOutputFile" in source
     assert "function chooseBrowserOutputFolder" in source
     assert "browserOutputDirectoryHandle" in source
-    assert "window.showDirectoryPicker" in source
+    assert "browserDownloadFallback" in source
+    assert "function activateBrowserDownloadFallback" in source
+    assert "hosted mode uses normal browser downloads instead" in source
+    assert "window.showDirectoryPicker" not in source
+    assert "state.browserDownloadFallback = isHostedBrowserOutputMode()" in source
+    assert "const canChooseFolder = state.capabilities.nativeOutputPicker" in source
+    assert "hosted-browser-downloads-3" in (WEB_UI_DIR / "index.html").read_text(encoding="utf-8")
     assert "function downloadOutputFile" in source
+    assert "function triggerOutputItemDownload" in source
+    assert "sent to browser downloads" in source
+    assert "function isTemporaryStorageError" in source
+    assert "Temporary conversion storage could not be written to." in source
     assert "/api/output-file/" in source
     assert "function setRevealButtonFeedback" in source
     assert '"/api/reveal-output-file"' in source

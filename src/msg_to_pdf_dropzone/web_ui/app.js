@@ -158,6 +158,7 @@ const state = {
   outputDirLabel: "",
   browserOutputDirectoryHandle: null,
   browserOutputDirLabel: "",
+  browserDownloadFallback: false,
   recentDestinations: [],
   recentlyQueuedIds: new Set(),
   activeConvertIds: [],
@@ -317,7 +318,9 @@ function isHostedBrowserOutputMode() {
 }
 
 function browserDirectoryPickerAvailable() {
-  return isHostedBrowserOutputMode() && typeof window.showDirectoryPicker === "function" && window.isSecureContext !== false;
+  // Chrome blocks many ordinary-looking Windows folders through this API, so
+  // hosted mode uses normal browser downloads instead.
+  return false;
 }
 
 function outputDestinationReady() {
@@ -325,7 +328,7 @@ function outputDestinationReady() {
     return Boolean(state.outputDir);
   }
   if (browserDirectoryPickerAvailable()) {
-    return Boolean(state.outputDir && state.browserOutputDirectoryHandle);
+    return Boolean(state.outputDir && (state.browserOutputDirectoryHandle || state.browserDownloadFallback));
   }
   return Boolean(state.outputDir);
 }
@@ -339,10 +342,10 @@ function defaultStatusDetail() {
     if (state.browserOutputDirLabel) {
       return `Saving copies to ${state.browserOutputDirLabel}.`;
     }
-    if (browserDirectoryPickerAvailable()) {
-      return "Click Convert to PDF and choose a local save folder in your browser.";
+    if (state.browserDownloadFallback) {
+      return "PDFs will download individually through your browser.";
     }
-    return "Converted PDFs will be available from the result list.";
+    return "PDFs will download individually through your browser.";
   }
   if (state.outputDir) {
     return `Saving to ${state.outputDir}`;
@@ -357,10 +360,11 @@ function formatDestinationLabel() {
   if (state.browserOutputDirLabel) {
     return state.browserOutputDirLabel;
   }
+  if (state.browserDownloadFallback) {
+    return "Browser downloads";
+  }
   if (isHostedBrowserOutputMode()) {
-    return browserDirectoryPickerAvailable()
-      ? "Choose a local folder before conversion."
-      : "PDFs will be available for download.";
+    return "Browser downloads";
   }
   if (state.outputDirLabel || state.outputDir) {
     return state.outputDirLabel || state.outputDir;
@@ -381,9 +385,7 @@ function refreshHostingCopy() {
     elements.workflowBody.textContent = isHostedBrowserOutputMode()
       ? state.browserOutputDirLabel
         ? `Upload .msg files or drag them into the page. Converted PDFs will be copied to ${state.browserOutputDirLabel}.`
-        : browserDirectoryPickerAvailable()
-          ? "Upload .msg files or drag them into the page. When you are ready, click Convert to PDF and choose a local save folder."
-          : "Upload .msg files or drag them into the page. Converted PDFs will be available from the result list."
+        : "Upload .msg files or drag them into the page. Converted PDFs will download individually through your browser."
       : state.outputDir
       ? `Upload .msg files or drag them into the page. Converted PDFs will be saved to ${state.outputDir}.`
       : state.capabilities.outlookImport
@@ -572,6 +574,9 @@ function compactErrorLabel(error) {
   if (lowered.includes("timed out") || lowered.includes("timeout")) {
     return "Conversion timed out. Retry this file.";
   }
+  if (isTemporaryStorageError(lowered)) {
+    return "Temporary conversion storage needs permission.";
+  }
   if (lowered.includes("permission") || lowered.includes("access is denied")) {
     return "Save folder needs permission.";
   }
@@ -582,6 +587,16 @@ function compactErrorLabel(error) {
     return "This is not a valid Outlook .msg email.";
   }
   return normalized.length > 86 ? `${normalized.slice(0, 83).trimEnd()}...` : normalized;
+}
+
+function isTemporaryStorageError(loweredError) {
+  return (
+    loweredError.includes("msg-to-pdf-html") ||
+    loweredError.includes("msg-to-pdf-mht") ||
+    loweredError.includes("msg-to-pdf-temp") ||
+    (loweredError.includes("appdata") && loweredError.includes("temp")) ||
+    (loweredError.includes("temp") && loweredError.includes("email.html"))
+  );
 }
 
 function failureExplanation(error) {
@@ -597,6 +612,12 @@ function failureExplanation(error) {
     return {
       reason: "The conversion took too long.",
       action: "Retry this file by itself. Large attachments or embedded images can need another pass.",
+    };
+  }
+  if (isTemporaryStorageError(lowered)) {
+    return {
+      reason: "Temporary conversion storage could not be written to.",
+      action: "Retry the file. If it fails again, the app server temp folder needs permission.",
     };
   }
   if (lowered.includes("permission") || lowered.includes("access is denied")) {
@@ -891,7 +912,9 @@ function renderOperations() {
           elements.resultGuidance.textContent = isHostedBrowserOutputMode()
             ? state.browserOutputDirLabel
               ? "PDFs were copied to your selected folder. Use Download if you need another copy."
-              : "Use Download on each saved PDF to keep a local copy."
+              : state.browserDownloadFallback
+                ? "PDFs were sent to your browser downloads. Use Download if you need another copy."
+                : "Use Download on each saved PDF to keep a local copy."
             : destinationKnown
             ? "Open the output folder to review the PDFs, or start a new batch when you are ready."
             : "The full batch is complete. Start a new batch when you are ready.";
@@ -1045,9 +1068,13 @@ function updateReadinessSignals(summary, { destinationKnown, isProcessing, isCom
   }
 
   if (!state.capabilities.nativeOutputPicker) {
-    if (browserDirectoryPickerAvailable()) {
+    if (isHostedBrowserOutputMode()) {
+      setReadinessStep(elements.readinessDestination, elements.readinessDestinationValue, "done", "Downloads");
+    } else if (browserDirectoryPickerAvailable()) {
       if (state.browserOutputDirectoryHandle) {
         setReadinessStep(elements.readinessDestination, elements.readinessDestinationValue, "done", lastPathSegment(state.browserOutputDirLabel) || "Selected");
+      } else if (state.browserDownloadFallback) {
+        setReadinessStep(elements.readinessDestination, elements.readinessDestinationValue, "done", "Downloads");
       } else if (summary.queued && !isComplete) {
         setReadinessStep(elements.readinessDestination, elements.readinessDestinationValue, "active", "Choose now");
       } else {
@@ -1167,11 +1194,19 @@ async function saveOutputItemToBrowserFolder(item) {
   return fileName;
 }
 
+async function triggerOutputItemDownload(item, outputName = "PDF") {
+  const fileName = item ? safeOutputFileName(item, outputName) : String(outputName || "converted.pdf");
+  const blob = await fetchOutputBlob(item.id);
+  triggerBlobDownload(blob, fileName);
+  return fileName;
+}
+
 async function downloadOutputFile(itemId, outputName = "PDF") {
   const item = state.items.find((candidate) => candidate.id === itemId);
-  const fileName = item ? safeOutputFileName(item, outputName) : String(outputName || "converted.pdf");
-  const blob = await fetchOutputBlob(itemId);
-  triggerBlobDownload(blob, fileName);
+  if (!item) {
+    throw new Error("The converted PDF is no longer in the active queue.");
+  }
+  const fileName = await triggerOutputItemDownload(item, outputName);
   addStatus("PDF download started.", fileName, "success");
 }
 
@@ -1187,7 +1222,30 @@ async function deliverConvertedFiles(ids) {
   }
 
   if (!state.browserOutputDirectoryHandle) {
-    return { mode: "download", saved: 0, failed: 0 };
+    let downloaded = 0;
+    const failures = [];
+    for (const item of completedItems) {
+      try {
+        await triggerOutputItemDownload(item);
+        downloaded += 1;
+        if (completedItems.length > 1) {
+          await delay(140);
+        }
+      } catch (error) {
+        failures.push({ item, error });
+      }
+    }
+    if (downloaded) {
+      addStatus(
+        `${downloaded} PDF${downloaded === 1 ? "" : "s"} sent to browser downloads.`,
+        completedItems.length > 1 ? "Your browser may ask permission to download multiple files." : "Check the browser downloads list.",
+        "success",
+      );
+    }
+    failures.forEach(({ item, error }) => {
+      addStatus("A PDF could not be downloaded.", `${safeOutputFileName(item)}: ${error.message}`, "error");
+    });
+    return { mode: "download", saved: downloaded, failed: failures.length };
   }
 
   let saved = 0;
@@ -1565,7 +1623,7 @@ function updateActionState() {
   elements.clearButton.disabled = busy || !hasItems;
   elements.convertButton.disabled = busy || !convertibleCount;
   if (elements.chooseFolderButton) {
-    const canChooseFolder = state.capabilities.nativeOutputPicker || browserDirectoryPickerAvailable();
+    const canChooseFolder = state.capabilities.nativeOutputPicker;
     elements.chooseFolderButton.disabled = busy || !canChooseFolder;
     elements.chooseFolderButton.textContent = canChooseFolder ? "Choose Save Folder" : "Browser Downloads";
   }
@@ -1873,6 +1931,7 @@ async function loadSettings() {
   };
   state.outputDir = payload.defaultOutputDir || state.outputDir;
   state.outputDirLabel = payload.defaultOutputDirLabel || state.outputDirLabel;
+  state.browserDownloadFallback = isHostedBrowserOutputMode();
   if (!isHostedBrowserOutputMode()) {
     state.browserOutputDirectoryHandle = null;
     state.browserOutputDirLabel = "";
@@ -1956,6 +2015,23 @@ async function requestBrowserDirectoryWritePermission(directoryHandle) {
   return true;
 }
 
+function activateBrowserDownloadFallback({ headline, detail, tone = "neutral", silent = false } = {}) {
+  state.browserOutputDirectoryHandle = null;
+  state.browserOutputDirLabel = "";
+  state.browserDownloadFallback = true;
+  refreshHostingCopy();
+  renderOperations();
+  updateActionState();
+  if (!silent) {
+    addStatus(
+      headline || "Using browser downloads instead.",
+      detail || "PDFs will download individually after conversion.",
+      tone,
+    );
+  }
+  return { outputDir: state.outputDir, outputDirLabel: "Browser downloads", downloadFallback: true };
+}
+
 async function chooseBrowserOutputFolder({ silentCancel = false } = {}) {
   if (!state.outputDir) {
     if (!silentCancel) {
@@ -1964,48 +2040,16 @@ async function chooseBrowserOutputFolder({ silentCancel = false } = {}) {
     return false;
   }
 
-  if (!browserDirectoryPickerAvailable()) {
-    if (!silentCancel) {
-      addStatus("Browser folder selection is unavailable.", "Converted PDFs will be available from the result list.", "neutral");
-    }
-    return { outputDir: state.outputDir, outputDirLabel: state.outputDirLabel };
-  }
-
-  let directoryHandle = null;
-  try {
-    directoryHandle = await window.showDirectoryPicker({ mode: "readwrite" });
-  } catch (error) {
-    if (!silentCancel) {
-      const isCancel = error?.name === "AbortError";
-      addStatus(
-        isCancel ? "Save folder selection was cancelled." : "Could not choose the save folder.",
-        isCancel ? "Choose a folder when you are ready to convert." : error.message,
-        isCancel ? "neutral" : "error",
-      );
-    }
-    return false;
-  }
-
-  const hasPermission = await requestBrowserDirectoryWritePermission(directoryHandle);
-  if (!hasPermission) {
-    if (!silentCancel) {
-      addStatus("Folder permission was not granted.", "Choose a folder and allow write access before converting.", "error");
-    }
-    return false;
-  }
-
-  state.browserOutputDirectoryHandle = directoryHandle;
-  state.browserOutputDirLabel = directoryHandle.name || "Selected browser folder";
-  refreshHostingCopy();
-  renderOperations();
-  addStatus("Save folder selected.", state.browserOutputDirLabel, "success");
-  updateActionState();
-  return { outputDir: state.outputDir, outputDirLabel: state.browserOutputDirLabel };
+  return activateBrowserDownloadFallback({
+    headline: "Browser downloads selected.",
+    detail: "PDFs will download individually after conversion.",
+    silent: silentCancel,
+  });
 }
 
-async function chooseOutputFolder({ silentCancel = false } = {}) {
+async function chooseOutputFolder({ silentCancel = false, allowDownloadFallback = false } = {}) {
   if (isHostedBrowserOutputMode()) {
-    return chooseBrowserOutputFolder({ silentCancel });
+    return chooseBrowserOutputFolder({ silentCancel, allowDownloadFallback });
   }
 
   const payload = await api("/api/choose-output-folder", { method: "POST" });
@@ -2038,8 +2082,8 @@ async function convertQueue() {
     return;
   }
 
-  if (state.capabilities.nativeOutputPicker || browserDirectoryPickerAvailable()) {
-    const selected = await chooseOutputFolder({ silentCancel: false });
+  if (state.capabilities.nativeOutputPicker) {
+    const selected = await chooseOutputFolder({ silentCancel: false, allowDownloadFallback: isHostedBrowserOutputMode() });
     if (!selected) {
       addStatus("Choose a destination to continue.", "Conversion has not started yet.", "error");
       return;
@@ -2069,7 +2113,7 @@ async function convertQueue() {
       const detail = delivery.mode === "browser-folder"
         ? `${delivery.saved} local cop${delivery.saved === 1 ? "y was" : "ies were"} saved to ${formatDestinationLabel()}.`
         : delivery.mode === "download"
-          ? "Use the Download button beside each saved PDF to keep a local copy."
+          ? `${delivery.saved} PDF${delivery.saved === 1 ? "" : "s"} sent to browser downloads.`
           : "Your PDFs have been saved.";
       addStatus(`Converted ${payload.convertedFiles.length} file(s).`, detail, "success");
       celebrateQueueCompletion();
@@ -2090,7 +2134,7 @@ async function retryItem(id) {
   }
 
   if (!outputDestinationReady()) {
-    const selected = await chooseOutputFolder({ silentCancel: false });
+    const selected = await chooseOutputFolder({ silentCancel: false, allowDownloadFallback: isHostedBrowserOutputMode() });
     if (!selected) {
       addStatus("Choose a destination before retrying.", "Retry has not started yet.", "error");
       return;
@@ -2114,6 +2158,8 @@ async function retryItem(id) {
     if (payload.convertedFiles?.length) {
       const detail = delivery.mode === "browser-folder"
         ? `${target.name} was converted and copied to ${formatDestinationLabel()}.`
+        : delivery.mode === "download"
+          ? `${target.name} was sent to browser downloads.`
         : `${target.name} was converted successfully.`;
       addStatus("Retry succeeded.", detail, "success");
       celebrateQueueCompletion();
@@ -2135,7 +2181,7 @@ async function retryFailedItems() {
   }
 
   if (!outputDestinationReady()) {
-    const selected = await chooseOutputFolder({ silentCancel: false });
+    const selected = await chooseOutputFolder({ silentCancel: false, allowDownloadFallback: isHostedBrowserOutputMode() });
     if (!selected) {
       addStatus("Choose a destination before retrying.", "Retry has not started yet.", "error");
       return;
@@ -2160,6 +2206,8 @@ async function retryFailedItems() {
     if (payload.convertedFiles?.length) {
       const detail = delivery.mode === "browser-folder"
         ? `Recovered PDFs were copied to ${formatDestinationLabel()}.`
+        : delivery.mode === "download"
+          ? `Recovered PDFs were sent to browser downloads.`
         : "Recovered PDFs have been saved.";
       addStatus(`Recovered ${payload.convertedFiles.length} file(s).`, detail, "success");
       celebrateQueueCompletion();

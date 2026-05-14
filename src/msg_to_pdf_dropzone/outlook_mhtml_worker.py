@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import os
 import shutil
 import sys
 from pathlib import Path
 import tempfile
 import time
+from uuid import uuid4
 
 OL_SAVE_AS_MHTML = 10
 OL_SAVE_AS_HTML = 5
@@ -27,6 +29,51 @@ def _wait_for_output_file(output_web_path: Path, *, timeout_seconds: float = OUT
         return False
 
 
+def _writable_temp_root(candidate: Path) -> Path | None:
+    try:
+        candidate.mkdir(parents=True, exist_ok=True)
+        probe_path = candidate / f".write-test-{os.getpid()}-{uuid4().hex[:8]}.tmp"
+        probe_path.write_text("ok", encoding="utf-8")
+        probe_path.unlink(missing_ok=True)
+    except OSError:
+        return None
+    return candidate
+
+
+def _candidate_temp_roots() -> list[Path]:
+    roots: list[Path] = []
+    temp_root = os.environ.get("MSG_TO_PDF_TEMP_DIR", "").strip()
+    if temp_root:
+        roots.append(Path(temp_root).expanduser())
+    roots.append(Path.cwd() / ".msg-to-pdf-temp")
+    roots.append(Path(tempfile.gettempdir()) / "msg-to-pdf-dropzone")
+    return roots
+
+
+def _make_temp_dir(prefix: str) -> Path:
+    last_error: OSError | None = None
+    for root in _candidate_temp_roots():
+        try:
+            writable_root = _writable_temp_root(root)
+            if writable_root is None:
+                continue
+            for _ in range(100):
+                temp_dir = writable_root / f"{prefix}{uuid4().hex[:10]}"
+                try:
+                    temp_dir.mkdir(parents=False, exist_ok=False)
+                except FileExistsError:
+                    continue
+                if _writable_temp_root(temp_dir) is not None:
+                    return temp_dir
+                shutil.rmtree(temp_dir, ignore_errors=True)
+        except OSError as exc:
+            last_error = exc
+            continue
+    if last_error is not None:
+        raise last_error
+    raise OSError("Could not create a writable temporary Outlook export directory.")
+
+
 def export_msg_to_web_archive(msg_path: Path, output_web_path: Path) -> int:
     try:
         import pythoncom
@@ -40,8 +87,9 @@ def export_msg_to_web_archive(msg_path: Path, output_web_path: Path) -> int:
     initialized = False
     result_code = 1
     try:
-        with tempfile.TemporaryDirectory(prefix="msg-to-pdf-outlook-msg-") as temp_dir:
-            staged_msg_path = Path(temp_dir) / msg_path.name
+        temp_dir = _make_temp_dir("msg-to-pdf-outlook-msg-")
+        try:
+            staged_msg_path = temp_dir / msg_path.name
             shutil.copy2(msg_path, staged_msg_path)
 
             pythoncom.CoInitialize()
@@ -59,6 +107,8 @@ def export_msg_to_web_archive(msg_path: Path, output_web_path: Path) -> int:
                         break
                 except Exception:
                     continue
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
     except Exception:
         result_code = 1
     finally:

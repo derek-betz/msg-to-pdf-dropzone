@@ -489,6 +489,32 @@ def test_print_web_document_via_edge_waits_for_delayed_output(
     assert pdf_writer._print_web_document_via_edge(input_path, output_path) is True
 
 
+def test_edge_html_pipeline_uses_staging_sibling_temp_dir(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    staging_dir = tmp_path / "staging"
+    output_path = tmp_path / "output" / "sample.pdf"
+    output_path.parent.mkdir()
+    seen: dict[str, Path] = {}
+
+    monkeypatch.delenv("MSG_TO_PDF_TEMP_DIR", raising=False)
+    monkeypatch.setenv("MSG_TO_PDF_STAGING_DIR", str(staging_dir))
+    monkeypatch.setattr(pdf_writer.os, "name", "nt", raising=False)
+
+    def fake_print(input_path: Path, target_path: Path) -> bool:
+        seen["input_path"] = input_path
+        target_path.write_bytes(b"%PDF-1.4\nfake\n")
+        return True
+
+    monkeypatch.setattr(pdf_writer, "_print_web_document_via_edge", fake_print)
+
+    assert pdf_writer._try_write_pdf_via_edge_html("<html><body>Hello</body></html>", output_path) is True
+    assert seen["input_path"].parent.parent == tmp_path / "temp"
+    assert output_path.exists()
+    assert not seen["input_path"].exists()
+
+
 def test_format_body_blocks_splits_on_blank_lines() -> None:
     result = _format_body_blocks("First paragraph.\n\nSecond paragraph.")
     assert result == ["First paragraph.", "Second paragraph."]
